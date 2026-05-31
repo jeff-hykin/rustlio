@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+BINARY="./result/bin/fastlio2"
+CONFIG="fastlio2/config/lio.yaml"
+BAG="data/ruwik2_pt3_bag_custom/ruwik2_pt3_bag_custom_0.mcap"
+OUT_DIR="logs.ignore/rust_runs"
+RUNS="${1:-5}"
+DURATION="${2:-60}"
+
+if [ ! -f "$BINARY" ]; then
+    echo "Binary not found. Run ./run/build first."
+    exit 1
+fi
+
+mkdir -p "$OUT_DIR"
+
+for i in $(seq 0 $((RUNS - 1))); do
+    name=$(printf "odom_run_%02d.npy" "$i")
+    echo "Run $((i + 1))/$RUNS → $OUT_DIR/$name"
+    "$BINARY" "$CONFIG" "$BAG" "$OUT_DIR/$name" "$DURATION" 2>/dev/null | tail -1
+done
+
+echo ""
+echo "Generating plot..."
+/opt/homebrew/bin/python3.11 - "$OUT_DIR" "$RUNS" <<'PYEOF'
+import sys, os, json
+import numpy as np
+
+out_dir = sys.argv[1]
+num_runs = int(sys.argv[2])
+
+def smooth(arr, window_ms=50, dt_ms=100):
+    w = max(1, int(window_ms / dt_ms))
+    if w <= 1:
+        return arr
+    kernel = np.ones(w) / w
+    return np.convolve(arr, kernel, mode='same')
+
+def compute_speed(data):
+    return np.sqrt(data[:, 4]**2 + data[:, 5]**2 + data[:, 6]**2)
+
+def load_runs(directory, count):
+    runs = []
+    for i in range(count):
+        path = os.path.join(directory, f"odom_run_{i:02d}.npy")
+        d = np.load(path)
+        t = d[:, 0] - d[0, 0]
+        s = compute_speed(d)
+        dt = np.median(np.diff(t)) * 1000 if len(t) > 1 else 100
+        runs.append((t, smooth(s, window_ms=50, dt_ms=dt)))
+    return runs
+
+cpp_dir = "logs.ignore/cpp_runs"
+has_cpp = os.path.exists(os.path.join(cpp_dir, "odom_run_00.npy"))
+
+rust_runs = load_runs(out_dir, num_runs)
+traces = []
+colors = ["#e74c3c", "#e67e22", "#f1c40f", "#2ecc71", "#3498db",
+          "#9b59b6", "#1abc9c", "#e91e63", "#00bcd4", "#ff5722"]
+
+if has_cpp:
+    cpp_files = sorted(f for f in os.listdir(cpp_dir) if f.endswith(".npy"))
+    cpp_runs = load_runs(cpp_dir, len(cpp_files))
+    min_len = min(len(t) for t, _ in cpp_runs)
+    t_common = cpp_runs[0][0][:min_len]
+    cpp_speeds = np.array([np.interp(t_common, t, s) for t, s in cpp_runs])
+    upper = np.sort(cpp_speeds, axis=0)[-2]
+    lower = np.sort(cpp_speeds, axis=0)[1]
+    traces.append({"x": t_common.tolist(), "y": upper.tolist(), "mode": "lines",
+        "name": f"C++ upper bound (2nd max of {len(cpp_files)})",
+        "line": {"color": "rgba(200,200,200,0.8)", "width": 2, "dash": "dash"}})
+    traces.append({"x": t_common.tolist(), "y": lower.tolist(), "mode": "lines",
+        "name": f"C++ lower bound (2nd min of {len(cpp_files)})",
+        "line": {"color": "rgba(200,200,200,0.8)", "width": 2, "dash": "dash"},
+        "fill": "tonexty", "fillcolor": "rgba(200,200,200,0.15)"})
+
+for i, (t, s) in enumerate(rust_runs):
+    traces.append({"x": t.tolist(), "y": s.tolist(), "mode": "lines",
+        "name": f"Rust run {i}", "line": {"color": colors[i % len(colors)], "width": 1.5}})
+
+layout = {"title": "FAST-LIO2: Rust Speed Over Time",
+    "xaxis": {"title": "Time (s)"}, "yaxis": {"title": "Speed (m/s)"},
+    "template": "plotly_dark", "legend": {"x": 0.01, "y": 0.99}}
+
+html = f"""<!DOCTYPE html>
+<html><head><script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script></head>
+<body><div id="plot" style="width:100%;height:95vh;"></div>
+<script>Plotly.newPlot('plot', {json.dumps(traces)}, {json.dumps(layout)});</script>
+</body></html>"""
+
+out_html = os.path.join(out_dir, "speed_comparison.html")
+with open(out_html, "w") as f:
+    f.write(html)
+print(f"Wrote {out_html}")
+
+try:
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    fig, ax = plt.subplots(figsize=(14, 6))
+    if has_cpp:
+        ax.fill_between(t_common, lower, upper, alpha=0.2, color='gray', label='C++ bounds')
+        ax.plot(t_common, upper, '--', color='gray', linewidth=1, alpha=0.6)
+        ax.plot(t_common, lower, '--', color='gray', linewidth=1, alpha=0.6)
+    for i, (t, s) in enumerate(rust_runs):
+        ax.plot(t, s, linewidth=1.2, color=colors[i % len(colors)], label=f'Rust run {i}')
+    ax.set_xlabel('Time (s)'); ax.set_ylabel('Speed (m/s)')
+    ax.set_title('FAST-LIO2: Rust Speed Over Time')
+    ax.legend(loc='upper left'); ax.grid(True, alpha=0.3); fig.tight_layout()
+    out_png = os.path.join(out_dir, "speed_comparison.png")
+    fig.savefig(out_png, dpi=150)
+    print(f"Wrote {out_png}")
+except ImportError:
+    print("matplotlib not available, skipping PNG")
+PYEOF

@@ -209,7 +209,11 @@ impl LidarProcessor {
 
         if effect_cloud_lidar.is_empty() {
             share_data.valid = false;
-            eprintln!("NO Effective Points!");
+            use std::sync::atomic::{AtomicBool, Ordering};
+            static WARNED: AtomicBool = AtomicBool::new(false);
+            if !WARNED.swap(true, Ordering::Relaxed) {
+                eprintln!("NO Effective Points! (suppressing further occurrences)");
+            }
             return;
         }
         share_data.valid = true;

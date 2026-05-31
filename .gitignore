@@ -2,6 +2,9 @@
 *.ignore
 *.ignore.*
 log/
+livox_ros_driver2
+
+# nix
 result
 
 # Rust

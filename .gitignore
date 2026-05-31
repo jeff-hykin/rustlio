@@ -2,3 +2,8 @@
 *.ignore
 *.ignore.*
 log/
+result
+
+# Rust
+rust/target/
+**/*.rs.bk

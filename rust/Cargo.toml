@@ -1,0 +1,23 @@
+[package]
+name = "fastlio2"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "fastlio2"
+path = "src/main.rs"
+
+[dependencies]
+nalgebra = "0.33"
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+mcap = "0.9"
+ndarray = "0.16"
+ndarray-npy = "0.9"
+cxx = { version = "1", optional = true }
+
+[features]
+pcl = ["dep:cxx"]
+
+[dev-dependencies]
+approx = "0.5"

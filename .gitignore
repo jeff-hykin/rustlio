@@ -9,3 +9,15 @@ result
 # Rust
 rust/target/
 **/*.rs.bk
+
+# loop closure benchmark build artifacts
+/loop_closure_bench/.deps/
+/loop_closure_bench/harness/build/
+
+# reloc benchmark build artifacts
+/reloc_bench/.deps/
+/reloc_bench/harness/build/
+
+# Python caches
+__pycache__/
+*.pyc

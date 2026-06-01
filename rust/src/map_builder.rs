@@ -1,5 +1,5 @@
 use crate::commons::*;
-use crate::ieskf::IESKF;
+use crate::ieskf::{IESKF, State};
 use crate::imu_processor::IMUProcessor;
 use crate::lidar_processor::LidarProcessor;
 
@@ -16,6 +16,7 @@ pub struct MapBuilder {
     pub kf: IESKF,
     imu_processor: IMUProcessor,
     pub lidar_processor: LidarProcessor,
+    last_good_state: Option<State>,
 }
 
 impl MapBuilder {
@@ -32,6 +33,7 @@ impl MapBuilder {
             kf,
             imu_processor,
             lidar_processor,
+            last_good_state: None,
         }
     }
 
@@ -59,6 +61,64 @@ impl MapBuilder {
             return;
         }
 
-        self.lidar_processor.process(package, &mut self.kf);
+        let state_pre_update = self.kf.x.clone();
+        self.lidar_processor.update(package, &mut self.kf);
+
+        if !self.reject_if_over_speed(state_pre_update) {
+            self.lidar_processor.incr_cloud_map(&self.kf);
+        }
+    }
+
+    /// Velocity-cap guardrail. A single-frame IESKF blow-up shows up as an
+    /// implausible post-update velocity. When `kf.x.v` exceeds `max_velocity`,
+    /// roll the state back to the last good one (or the pre-update state if we
+    /// have none yet), zero its velocity, and report rejection so the caller
+    /// skips the map insert — keeping the bad pose out of the ikd-tree. State is
+    /// held per-instance, so independent `MapBuilder`s never interfere.
+    /// Returns `true` when the frame was rejected.
+    fn reject_if_over_speed(&mut self, state_pre_update: State) -> bool {
+        let vnorm = self.kf.x.v.norm();
+        if self.config.max_velocity > 0.0 && vnorm > self.config.max_velocity {
+            let mut clean = self.last_good_state.clone().unwrap_or(state_pre_update);
+            clean.v = V3D::zeros();
+            self.kf.x = clean;
+            true
+        } else {
+            self.last_good_state = Some(self.kf.x.clone());
+            false
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn velocity_cap_rolls_back_and_stays_instance_local() {
+        let mut config = Config::default();
+        config.max_velocity = 3.0;
+
+        let mut a = MapBuilder::new(config.clone());
+        let b = MapBuilder::new(config);
+
+        // A sane frame is accepted and remembered as the last good state.
+        a.kf.x.t_wi = V3D::new(1.0, 0.0, 0.0);
+        a.kf.x.v = V3D::new(1.0, 0.0, 0.0);
+        let pre = a.kf.x.clone();
+        assert!(!a.reject_if_over_speed(pre));
+        assert!(a.last_good_state.is_some());
+
+        // An over-speed frame is rejected: velocity zeroed, pose rolled back to
+        // the last good one, not the teleported pre-update value.
+        let pre = a.kf.x.clone();
+        a.kf.x.t_wi = V3D::new(99.0, 0.0, 0.0);
+        a.kf.x.v = V3D::new(50.0, 0.0, 0.0);
+        assert!(a.reject_if_over_speed(pre));
+        assert_eq!(a.kf.x.v, V3D::zeros());
+        assert_eq!(a.kf.x.t_wi, V3D::new(1.0, 0.0, 0.0));
+
+        // The second mapper shares no state with the first.
+        assert!(b.last_good_state.is_none());
     }
 }

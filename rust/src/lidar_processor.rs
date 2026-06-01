@@ -61,7 +61,7 @@ impl LidarProcessor {
         self.ikdtree.build(points.to_vec());
     }
 
-    pub fn process(&mut self, package: &SyncPackage, kf: &mut IESKF) {
+    pub fn update(&mut self, package: &SyncPackage, kf: &mut IESKF) {
         if self.config.scan_resolution > 0.0 {
             self.cloud_down_lidar =
                 voxel_grid::downsample(&package.cloud, self.config.scan_resolution);
@@ -71,7 +71,6 @@ impl LidarProcessor {
 
         self.trim_cloud_map(kf);
         self.run_update(kf);
-        self.incr_cloud_map(kf);
     }
 
     fn run_update(&mut self, kf: &mut IESKF) {

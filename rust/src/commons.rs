@@ -58,6 +58,8 @@ pub struct Config {
     pub t_il: V3D,
     #[serde(default = "default_lidar_cov_inv")]
     pub lidar_cov_inv: f64,
+    #[serde(default = "default_max_velocity")]
+    pub max_velocity: f64,
 }
 
 fn default_r_il() -> M3D { M3D::identity() }
@@ -98,6 +100,7 @@ fn default_near_search_num() -> usize { 5 }
 fn default_ieskf_max_iter() -> usize { 5 }
 fn default_gravity_align() -> bool { true }
 fn default_lidar_cov_inv() -> f64 { 1000.0 }
+fn default_max_velocity() -> f64 { 3.1 }
 
 impl Default for Config {
     fn default() -> Self {
@@ -122,6 +125,7 @@ impl Default for Config {
             r_il: M3D::identity(),
             t_il: V3D::zeros(),
             lidar_cov_inv: 1000.0,
+            max_velocity: 3.1,
         }
     }
 }

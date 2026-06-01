@@ -171,6 +171,7 @@ All fields have defaults and can be loaded from a YAML file via `serde_yaml`:
 | `esti_il` | false | Estimate IMU-LiDAR extrinsics online |
 | `r_il`, `t_il` | identity, zeros | IMU-LiDAR extrinsic calibration |
 | `lidar_cov_inv` | 1000.0 | Inverse LiDAR measurement covariance |
+| `max_velocity` | 3.1 | Velocity-cap guardrail (m/s); 0 disables. Frames whose post-update speed exceeds this are rolled back and skipped |
 
 ## What's implemented
 
@@ -180,6 +181,7 @@ All fields have defaults and can be loaded from a YAML file via `serde_yaml`:
 - Iterated Error-State Kalman Filter (IESKF) with 21-DOF state
 - Point-to-plane matching with incremental k-d tree
 - Local map management (voxel downsampling, box trimming)
+- Velocity-cap guardrail (rejects/rolls back frames that blow up the filter, per-instance state)
 - MCAP bag reader for Livox LiDAR + IMU messages
 - Rerun visualization output
 - `.npy` odometry output

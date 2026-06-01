@@ -5,8 +5,7 @@ use fastlio2::utils;
 
 fn load_config(path: &str) -> Config {
     if Path::new(path).exists() {
-        let contents = std::fs::read_to_string(path).expect("Failed to read config");
-        serde_yaml::from_str(&contents).expect("Failed to parse config")
+        Config::from_yaml_path(path).expect("Failed to parse config")
     } else {
         eprintln!("Config not found at {}, using defaults", path);
         Config::default()
@@ -143,18 +142,16 @@ fn read_mcap_bag(path: &str, config: &Config) -> Vec<(f64, McapMessage)> {
         let topic = msg.channel.topic.as_str();
         let log_time = msg.log_time as f64 * 1e-9;
 
-        match topic {
-            "/livox/imu" => {
-                if let Some(imu) = parse_imu_cdr(&msg.data) {
-                    messages.push((log_time, McapMessage::Imu(imu)));
-                }
+        if topic == config.imu_topic {
+            if let Some(imu) = parse_imu_cdr(&msg.data) {
+                messages.push((log_time, McapMessage::Imu(imu)));
             }
-            "/livox/lidar" => {
+        } else if topic == config.lidar_topic {
+            if config.lidar_type == 1 {
                 if let Some(cloud_data) = parse_livox_custom_msg(&msg.data, config) {
                     messages.push((log_time, McapMessage::Lidar(cloud_data)));
                 }
             }
-            _ => {}
         }
     }
     messages.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());

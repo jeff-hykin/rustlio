@@ -1,5 +1,5 @@
 use nalgebra::{Matrix3, MatrixXx3, Vector3, Vector4, DVector};
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
 
 pub type M3D = Matrix3<f64>;
 pub type V3D = Vector3<f64>;
@@ -16,95 +16,46 @@ pub struct Point {
 
 pub type PointCloud = Vec<Point>;
 
-#[derive(Clone, Debug, Deserialize)]
+/// Runtime configuration consumed by `MapBuilder`.
+///
+/// This is a plain data struct with no YAML/serde coupling. Parse a config
+/// file with [`Config::from_yaml_str`] / [`Config::from_yaml_path`], which
+/// accepts both this repo's flat `lio.yaml` schema and the upstream FAST-LIO
+/// nested schema (`common`/`preprocess`/`mapping`) used by `config_examples`.
+#[derive(Clone, Debug)]
 pub struct Config {
-    #[serde(default = "default_lidar_filter_num")]
+    pub imu_topic: String,
+    pub lidar_topic: String,
+    pub lidar_type: i32,
     pub lidar_filter_num: i32,
-    #[serde(default = "default_lidar_min_range")]
     pub lidar_min_range: f64,
-    #[serde(default = "default_lidar_max_range")]
     pub lidar_max_range: f64,
-    #[serde(default = "default_scan_resolution")]
     pub scan_resolution: f64,
-    #[serde(default = "default_map_resolution")]
     pub map_resolution: f64,
-    #[serde(default = "default_cube_len")]
     pub cube_len: f64,
-    #[serde(default = "default_det_range")]
     pub det_range: f64,
-    #[serde(default = "default_move_thresh")]
     pub move_thresh: f64,
-    #[serde(default = "default_na")]
     pub na: f64,
-    #[serde(default = "default_ng")]
     pub ng: f64,
-    #[serde(default = "default_nba")]
     pub nba: f64,
-    #[serde(default = "default_nbg")]
     pub nbg: f64,
-    #[serde(default = "default_imu_init_num")]
     pub imu_init_num: usize,
-    #[serde(default = "default_near_search_num")]
     pub near_search_num: usize,
-    #[serde(default = "default_ieskf_max_iter")]
     pub ieskf_max_iter: usize,
-    #[serde(default = "default_gravity_align")]
     pub gravity_align: bool,
-    #[serde(default)]
     pub esti_il: bool,
-    #[serde(default = "default_r_il", deserialize_with = "deserialize_m3d")]
     pub r_il: M3D,
-    #[serde(default = "default_t_il", deserialize_with = "deserialize_v3d")]
     pub t_il: V3D,
-    #[serde(default = "default_lidar_cov_inv")]
     pub lidar_cov_inv: f64,
-    #[serde(default = "default_max_velocity")]
     pub max_velocity: f64,
 }
-
-fn default_r_il() -> M3D { M3D::identity() }
-fn default_t_il() -> V3D { V3D::zeros() }
-
-fn deserialize_m3d<'de, D: Deserializer<'de>>(deserializer: D) -> Result<M3D, D::Error> {
-    let v: Vec<f64> = Vec::deserialize(deserializer)?;
-    if v.len() == 9 {
-        Ok(M3D::from_row_slice(&v))
-    } else {
-        Ok(M3D::identity())
-    }
-}
-
-fn deserialize_v3d<'de, D: Deserializer<'de>>(deserializer: D) -> Result<V3D, D::Error> {
-    let v: Vec<f64> = Vec::deserialize(deserializer)?;
-    if v.len() == 3 {
-        Ok(V3D::new(v[0], v[1], v[2]))
-    } else {
-        Ok(V3D::zeros())
-    }
-}
-
-fn default_lidar_filter_num() -> i32 { 3 }
-fn default_lidar_min_range() -> f64 { 0.5 }
-fn default_lidar_max_range() -> f64 { 20.0 }
-fn default_scan_resolution() -> f64 { 0.15 }
-fn default_map_resolution() -> f64 { 0.3 }
-fn default_cube_len() -> f64 { 300.0 }
-fn default_det_range() -> f64 { 60.0 }
-fn default_move_thresh() -> f64 { 1.5 }
-fn default_na() -> f64 { 0.01 }
-fn default_ng() -> f64 { 0.01 }
-fn default_nba() -> f64 { 0.0001 }
-fn default_nbg() -> f64 { 0.0001 }
-fn default_imu_init_num() -> usize { 20 }
-fn default_near_search_num() -> usize { 5 }
-fn default_ieskf_max_iter() -> usize { 5 }
-fn default_gravity_align() -> bool { true }
-fn default_lidar_cov_inv() -> f64 { 1000.0 }
-fn default_max_velocity() -> f64 { 3.1 }
 
 impl Default for Config {
     fn default() -> Self {
         Config {
+            imu_topic: "/livox/imu".to_string(),
+            lidar_topic: "/livox/lidar".to_string(),
+            lidar_type: 1,
             lidar_filter_num: 3,
             lidar_min_range: 0.5,
             lidar_max_range: 20.0,
@@ -127,6 +78,134 @@ impl Default for Config {
             lidar_cov_inv: 1000.0,
             max_velocity: 3.1,
         }
+    }
+}
+
+impl Config {
+    /// Parse a YAML string (flat or upstream-nested) into a `Config`.
+    /// Missing keys fall back to [`Config::default`].
+    pub fn from_yaml_str(s: &str) -> Result<Config, serde_yaml::Error> {
+        let raw: RawConfig = serde_yaml::from_str(s)?;
+        Ok(raw.into_config())
+    }
+
+    /// Parse a YAML file at `path` into a `Config`.
+    pub fn from_yaml_path<P: AsRef<std::path::Path>>(path: P) -> std::io::Result<Config> {
+        let contents = std::fs::read_to_string(path)?;
+        Self::from_yaml_str(&contents)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    }
+}
+
+fn vec_to_m3d(v: &[f64]) -> Option<M3D> {
+    (v.len() == 9).then(|| M3D::from_row_slice(v))
+}
+
+fn vec_to_v3d(v: &[f64]) -> Option<V3D> {
+    (v.len() == 3).then(|| V3D::new(v[0], v[1], v[2]))
+}
+
+/// Deserialization shim. Every field is optional so a partial config (in
+/// either schema) merges onto `Config::default()`. Unknown keys (e.g. the
+/// upstream `publish`/`pcd_save` sections, `body_frame`, `scan_line`) are
+/// ignored. Where a value can be supplied by both schemas, the flat top-level
+/// key wins over the nested section.
+#[derive(Deserialize, Default)]
+struct RawConfig {
+    // Upstream FAST-LIO nested sections.
+    common: Option<CommonSection>,
+    preprocess: Option<PreprocessSection>,
+    mapping: Option<MappingSection>,
+
+    // Flat schema (this repo's `lio.yaml`).
+    imu_topic: Option<String>,
+    lidar_topic: Option<String>,
+    lidar_type: Option<i32>,
+    lidar_filter_num: Option<i32>,
+    lidar_min_range: Option<f64>,
+    lidar_max_range: Option<f64>,
+    scan_resolution: Option<f64>,
+    map_resolution: Option<f64>,
+    cube_len: Option<f64>,
+    det_range: Option<f64>,
+    move_thresh: Option<f64>,
+    na: Option<f64>,
+    ng: Option<f64>,
+    nba: Option<f64>,
+    nbg: Option<f64>,
+    imu_init_num: Option<usize>,
+    near_search_num: Option<usize>,
+    ieskf_max_iter: Option<usize>,
+    gravity_align: Option<bool>,
+    esti_il: Option<bool>,
+    r_il: Option<Vec<f64>>,
+    t_il: Option<Vec<f64>>,
+    lidar_cov_inv: Option<f64>,
+    max_velocity: Option<f64>,
+}
+
+#[derive(Deserialize, Default)]
+struct CommonSection {
+    imu_topic: Option<String>,
+    lid_topic: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+struct PreprocessSection {
+    lidar_type: Option<i32>,
+    blind: Option<f64>,
+    point_filter_num: Option<i32>,
+}
+
+#[derive(Deserialize, Default)]
+struct MappingSection {
+    acc_cov: Option<f64>,
+    gyr_cov: Option<f64>,
+    b_acc_cov: Option<f64>,
+    b_gyr_cov: Option<f64>,
+    det_range: Option<f64>,
+    cube_side_length: Option<f64>,
+    filter_size_surf: Option<f64>,
+    filter_size_map: Option<f64>,
+    extrinsic_est_en: Option<bool>,
+    #[serde(rename = "extrinsic_R")]
+    extrinsic_r: Option<Vec<f64>>,
+    #[serde(rename = "extrinsic_T")]
+    extrinsic_t: Option<Vec<f64>>,
+}
+
+impl RawConfig {
+    fn into_config(self) -> Config {
+        let mut c = Config::default();
+        let common = self.common.unwrap_or_default();
+        let pre = self.preprocess.unwrap_or_default();
+        let map = self.mapping.unwrap_or_default();
+
+        if let Some(v) = self.imu_topic.or(common.imu_topic) { c.imu_topic = v; }
+        if let Some(v) = self.lidar_topic.or(common.lid_topic) { c.lidar_topic = v; }
+        if let Some(v) = self.lidar_type.or(pre.lidar_type) { c.lidar_type = v; }
+        if let Some(v) = self.lidar_filter_num.or(pre.point_filter_num) { c.lidar_filter_num = v; }
+        if let Some(v) = self.lidar_min_range.or(pre.blind) { c.lidar_min_range = v; }
+        if let Some(v) = self.lidar_max_range { c.lidar_max_range = v; }
+        if let Some(v) = self.scan_resolution.or(map.filter_size_surf) { c.scan_resolution = v; }
+        if let Some(v) = self.map_resolution.or(map.filter_size_map) { c.map_resolution = v; }
+        if let Some(v) = self.cube_len.or(map.cube_side_length) { c.cube_len = v; }
+        if let Some(v) = self.det_range.or(map.det_range) { c.det_range = v; }
+        if let Some(v) = self.move_thresh { c.move_thresh = v; }
+        if let Some(v) = self.na.or(map.acc_cov) { c.na = v; }
+        if let Some(v) = self.ng.or(map.gyr_cov) { c.ng = v; }
+        if let Some(v) = self.nba.or(map.b_acc_cov) { c.nba = v; }
+        if let Some(v) = self.nbg.or(map.b_gyr_cov) { c.nbg = v; }
+        if let Some(v) = self.imu_init_num { c.imu_init_num = v; }
+        if let Some(v) = self.near_search_num { c.near_search_num = v; }
+        if let Some(v) = self.ieskf_max_iter { c.ieskf_max_iter = v; }
+        if let Some(v) = self.gravity_align { c.gravity_align = v; }
+        if let Some(v) = self.esti_il.or(map.extrinsic_est_en) { c.esti_il = v; }
+        if let Some(v) = self.r_il.or(map.extrinsic_r).as_deref().and_then(vec_to_m3d) { c.r_il = v; }
+        if let Some(v) = self.t_il.or(map.extrinsic_t).as_deref().and_then(vec_to_v3d) { c.t_il = v; }
+        if let Some(v) = self.lidar_cov_inv { c.lidar_cov_inv = v; }
+        if let Some(v) = self.max_velocity { c.max_velocity = v; }
+        c
     }
 }
 

@@ -237,61 +237,78 @@ fn main() {
 
     let mut builder = MapBuilder::new(config);
 
-    let mut imu_buf: Vec<IMUData> = Vec::new();
+    // Split the time-sorted stream into IMU samples and lidar frames, then pair
+    // them with the same syncPackage rule as the C++ reference: a lidar frame
+    // gets every IMU sample up to its cloud_end_time. This is essential — a
+    // frame's stamp is its START time, so the IMU spanning the frame's own sweep
+    // arrive AFTER it in the stream. The previous code drained the IMU buffer on
+    // each lidar message, giving every frame the prior frame's IMU window and
+    // forcing the undistort to extrapolate ~0.1 s of motion per frame, which
+    // accumulated into large vertical (z) drift.
+    let imus: Vec<&IMUData> = messages
+        .iter()
+        .filter_map(|(_, m)| if let McapMessage::Imu(i) = m { Some(i) } else { None })
+        .collect();
+    let frames: Vec<&LidarCloud> = messages
+        .iter()
+        .filter_map(|(_, m)| if let McapMessage::Lidar(l) = m { Some(l) } else { None })
+        .collect();
+
     let mut odom_count = 0;
     let mut first_odom_time: Option<f64> = None;
-    let mut odom_records: Vec<[f64; 13]> = Vec::new();
+    let mut odom_records: Vec<[f64; 7]> = Vec::new();
+    let mut imu_idx = 0usize;
 
-    for (_log_time, msg) in &messages {
-        match msg {
-            McapMessage::Imu(imu) => {
-                imu_buf.push(imu.clone());
+    for lidar in frames {
+        if let Some(t0) = first_odom_time {
+            if lidar.start_time - t0 > duration_limit {
+                break;
             }
-            McapMessage::Lidar(lidar) => {
-                if imu_buf.is_empty() {
-                    continue;
-                }
+        }
 
-                if let Some(t0) = first_odom_time {
-                    if lidar.start_time - t0 > duration_limit {
-                        break;
-                    }
-                }
+        let mut cloud = lidar.cloud.clone();
+        cloud.sort_by(|a, b| a.curvature.partial_cmp(&b.curvature).unwrap());
+        let cloud_end = lidar.end_time;
 
-                let mut package = SyncPackage {
-                    imus: imu_buf.drain(..).collect(),
-                    cloud: lidar.cloud.clone(),
-                    cloud_start_time: lidar.start_time,
-                    cloud_end_time: lidar.end_time,
-                };
-                builder.process(&mut package);
+        let mut pkg_imus = Vec::new();
+        while imu_idx < imus.len() && imus[imu_idx].time < cloud_end {
+            pkg_imus.push(imus[imu_idx].clone());
+            imu_idx += 1;
+        }
+        if pkg_imus.is_empty() {
+            continue;
+        }
 
-                if builder.status() == BuilderStatus::Mapping {
-                    let state = &builder.kf.x;
-                    let speed = state.v.norm();
+        let mut package = SyncPackage {
+            imus: pkg_imus,
+            cloud,
+            cloud_start_time: lidar.start_time,
+            cloud_end_time: cloud_end,
+        };
+        builder.process(&mut package);
 
-                    if first_odom_time.is_none() {
-                        first_odom_time = Some(lidar.start_time);
-                    }
+        if builder.status() == BuilderStatus::Mapping {
+            let state = &builder.kf.x;
+            let speed = state.v.norm();
 
-                    odom_records.push([
-                        lidar.start_time,
-                        state.imu_to_world_trans[0], state.imu_to_world_trans[1], state.imu_to_world_trans[2],
-                        state.v[0], state.v[1], state.v[2],
-                        state.g[0], state.g[1], state.g[2],
-                        state.ba[0], state.ba[1], state.ba[2],
-                    ]);
-
-                    if odom_count % 100 == 0 {
-                        log::debug!(
-                            "odom {}: speed={:.3} m/s  t={:.2}s",
-                            odom_count, speed,
-                            lidar.start_time - first_odom_time.unwrap_or(lidar.start_time),
-                        );
-                    }
-                    odom_count += 1;
-                }
+            if first_odom_time.is_none() {
+                first_odom_time = Some(lidar.start_time);
             }
+
+            odom_records.push([
+                lidar.start_time,
+                state.imu_to_world_trans[0], state.imu_to_world_trans[1], state.imu_to_world_trans[2],
+                state.v[0], state.v[1], state.v[2],
+            ]);
+
+            if odom_count % 100 == 0 {
+                log::debug!(
+                    "odom {}: speed={:.3} m/s  t={:.2}s",
+                    odom_count, speed,
+                    lidar.start_time - first_odom_time.unwrap_or(lidar.start_time),
+                );
+            }
+            odom_count += 1;
         }
     }
 
@@ -299,9 +316,9 @@ fn main() {
 
     if let Some(out) = output_path {
         let rows = odom_records.len();
-        let mut data = Array2::<f64>::zeros((rows, 13));
+        let mut data = Array2::<f64>::zeros((rows, 7));
         for (i, rec) in odom_records.iter().enumerate() {
-            for j in 0..13 {
+            for j in 0..7 {
                 data[[i, j]] = rec[j];
             }
         }

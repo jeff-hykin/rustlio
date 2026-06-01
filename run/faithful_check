@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+# Faithfulness check: does fastlio_rs reproduce upstream C++ FAST-LIO?
+#
+# Pipeline (all data on one sensor clock, so no cross-clock guessing):
+#   1. extract the upstream C++ FAST-LIO trajectory from the DimOS recording DB
+#      (this is "hku-mars FAST-LIO" run on the SAME pcap, captured live).
+#   2. find where that upstream odom diverges — the robot is physically capped at
+#      ~3.1 m/s on flat ground, and when FAST-LIO breaks it teleports (a single
+#      odom step jumps far past what the robot can move in one frame). We cut at
+#      the first such jump and only compare BEFORE it (it never recovers).
+#   3. decode the raw Livox Mid-360 pcap (the exact sensor stream upstream ate)
+#      into an MCAP of Livox CustomMsg + Imu that fastlio_rs reads unchanged.
+#   4. run the Rust binary on that MCAP for the pre-divergence window.
+#   5. overlay + metrics (yaw-aligned ATE, XY/Z split, scale) -> PNG + report.
+#
+# Usage:
+#   ./run/faithful_check [--pcap PATH] [--db PATH] [--rebuild]
+#                        [--margin S] [--jump-thresh M] [--tol M]
+# Defaults point at the Go2/Mid-360 recording on the USB drive.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+
+REC="/Volumes/USB/fastlio_recordings/recording_go2_mid360_2026-05-28_7-37pm-PST"
+PCAP="$REC.pcap"
+DB="${REC}_with_imu.db"
+CONFIG="config_examples/mid360.yaml"
+OUT="logs.ignore/faithful"
+MARGIN=8           # seconds to convert/run past the divergence cutoff
+JUMP=0.3           # upstream single-step jump (m) that marks divergence
+TOL=0.5            # 3D aligned-RMSE PASS threshold (m)
+REBUILD=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --pcap) PCAP="$2"; shift ;;
+        --db) DB="$2"; shift ;;
+        --margin) MARGIN="$2"; shift ;;
+        --jump-thresh) JUMP="$2"; shift ;;
+        --tol|--tolerance) TOL="$2"; shift ;;
+        --rebuild) REBUILD=1 ;;
+        -h|--help) sed -n '2,8p' "$0"; exit 0 ;;
+        *) echo "unknown arg: $1" >&2; exit 2 ;;
+    esac
+    shift
+done
+
+mkdir -p "$OUT"
+[ -f "$PCAP" ] || { echo "pcap not found: $PCAP  (is the USB drive mounted?)"; exit 1; }
+[ -f "$DB" ]   || { echo "db not found: $DB  (is the USB drive mounted?)"; exit 1; }
+
+# --- pick a python with mcap + numpy + matplotlib (the converter needs mcap) ---
+PY=""
+for cand in "${FAITHFUL_PYTHON:-}" "$HOME/repos/dimos2/.venv/bin/python" \
+            "$HOME/repos/dimos/.venv/bin/python" python3; do
+    [ -z "$cand" ] && continue
+    if "$cand" -c "import mcap.writer, numpy, matplotlib" >/dev/null 2>&1; then PY="$cand"; break; fi
+done
+[ -n "$PY" ] || { echo "no python found with mcap+numpy+matplotlib (set FAITHFUL_PYTHON)"; exit 1; }
+echo "python: $PY"
+
+# --- 1. upstream trajectory ---
+UP="$OUT/upstream_odom.npy"
+if [ "$REBUILD" = 1 ] || [ ! -f "$UP" ]; then
+    "$PY" faithful_check/extract_upstream.py "$DB" "$UP"
+else
+    echo "reusing $UP"
+fi
+
+# --- 2. divergence cutoff (drives how much data we convert/run) ---
+CUT=$("$PY" - "$UP" "$JUMP" <<'PYEOF'
+import sys, numpy as np
+up = np.load(sys.argv[1]); thr = float(sys.argv[2])
+t = up[:,0]-up[0,0]; j = np.linalg.norm(np.diff(up[:,1:4],axis=0),axis=1)
+d = np.where(j>thr)[0]
+print(f"{(t[d[0]+1] if len(d) else t[-1]):.2f}")
+PYEOF
+)
+DUR=$("$PY" -c "print(f'{$CUT + $MARGIN:.1f}')")
+echo "divergence cutoff ${CUT}s -> converting/running ${DUR}s (cutoff + ${MARGIN}s margin)"
+
+# --- 3. pcap -> mcap (cached; keyed on duration) ---
+MCAP="$OUT/faithful_${DUR}s.mcap"
+if [ "$REBUILD" = 1 ] || [ ! -f "$MCAP" ]; then
+    "$PY" faithful_check/pcap_to_mcap.py "$PCAP" "$MCAP" --max-seconds "$DUR"
+else
+    echo "reusing $MCAP"
+fi
+
+# --- 4. build + run the Rust binary ---
+BIN="rust/target/release/fastlio2"
+echo "building $BIN ..."
+( cd rust && cargo build --release --bin fastlio2 ) || { echo "rust build failed"; exit 1; }
+RU="$OUT/rust_odom_${DUR}s.npy"
+echo "running fastlio_rs ..."
+"$BIN" "$CONFIG" "$MCAP" "$RU" "$DUR" 2>/dev/null | tail -1
+
+# --- 5. compare + plot ---
+"$PY" faithful_check/compare.py "$UP" "$RU" "$OUT" \
+    --jump-thresh "$JUMP" --tolerance "$TOL" || true   # nonzero exit just means FAIL verdict
+echo ""
+echo "overlay: $OUT/faithful_check.png"

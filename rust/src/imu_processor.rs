@@ -70,19 +70,17 @@ impl IMUProcessor {
             kf.x.init_gravity_dir(&(-acc_mean));
         }
 
-        // 24-dim error-state covariance (gravity is rows 21..24, estimated
-        // online). Matches upstream FAST_LIO IMU_init() block magnitudes.
-        kf.p = crate::ieskf::M24D::identity();
+        // 21-dim error-state covariance. Matches the C++ reference IMU_init()
+        // block magnitudes (gravity is fixed, not in the error state).
+        kf.p = crate::ieskf::M21D::identity();
         kf.p.fixed_view_mut::<3, 3>(6, 6) // lidar_to_imu_rot
             .copy_from(&(M3D::identity() * 0.00001));
         kf.p.fixed_view_mut::<3, 3>(9, 9) // lidar_to_imu_trans
             .copy_from(&(M3D::identity() * 0.00001));
         kf.p.fixed_view_mut::<3, 3>(15, 15) // gyro bias
             .copy_from(&(M3D::identity() * 0.0001));
-        kf.p.fixed_view_mut::<3, 3>(18, 18) // accel bias (upstream seeds 1e-3)
-            .copy_from(&(M3D::identity() * 0.001));
-        kf.p.fixed_view_mut::<3, 3>(21, 21) // gravity (3-DOF additive)
-            .copy_from(&(M3D::identity() * 0.0001));
+        kf.p.fixed_view_mut::<3, 3>(18, 18) // accel bias
+            .copy_from(&(M3D::identity() * 0.0001)); // C++ reference seeds 1e-4 (was 1e-3 here)
 
         self.last_imu = self.imu_cache.last().cloned();
         self.last_propagate_end_time = package.cloud_end_time;

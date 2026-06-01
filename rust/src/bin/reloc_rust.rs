@@ -1,4 +1,4 @@
-// Rust port of Ivan's global relocalizer (dimos relocalize.py / the C++
+// Rust port of the global FPFH+RANSAC relocalizer (dimos relocalize.py / the C++
 // global_reloc_bench). Global FPFH+RANSAC method, no initial guess:
 //   multi-scale FPFH + RANSAC feature matching (restarts per scale)
 //   -> 180deg yaw-flip variants -> gravity filter

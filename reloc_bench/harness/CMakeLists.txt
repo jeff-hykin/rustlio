@@ -24,7 +24,7 @@ target_include_directories(reloc_bench PRIVATE
 target_link_libraries(reloc_bench PRIVATE ${PCL_LIBRARIES})
 target_compile_definitions(reloc_bench PRIVATE ${PCL_DEFINITIONS})
 
-# Backend 2: C++ port of Ivan's global FPFH+RANSAC relocalizer (dimos
+# Backend 2: C++ port of the global FPFH+RANSAC relocalizer (dimos
 # dimos/mapping/relocalization/relocalize.py). Same CLI contract; ignores the
 # per-trial initial guess (it's a global method).
 add_executable(global_reloc_bench global_reloc_bench.cpp)

@@ -1,7 +1,7 @@
-// C++ port of Ivan's global relocalizer (dimos
-// dimos/mapping/relocalization/relocalize.py) — "auto research from ivan
-// sloptimization/ransac". A GLOBAL method: given a prior map and a local
-// submap, recover the submap's pose in the map frame with NO initial guess.
+// C++ port of the global FPFH+RANSAC relocalizer (dimos
+// dimos/mapping/relocalization/relocalize.py). A GLOBAL method: given a prior
+// map and a local submap, recover the submap's pose in the map frame with NO
+// initial guess.
 //
 // Pipeline (faithful to relocalize.py):
 //   multi-scale FPFH + RANSAC feature matching (several restarts per scale)

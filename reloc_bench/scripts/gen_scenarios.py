@@ -145,7 +145,7 @@ def gen_real(dataset: Path, reps: int, seed: int, query_stride: int,
 
 def gen_global(dataset: Path, name: str, query_stride: int, window: int,
                map_stride: int, map_voxel: float, sub_voxel: float, seed: int) -> None:
-    """Scenario for Ivan's GLOBAL relocalizer: a stitched prior map + per-query
+    """Scenario for the global FPFH+RANSAC relocalizer: a stitched prior map + per-query
     local submaps (accumulated windows of frames, in the center frame's body
     frame). No initial guess is used; truth = center frame's world pose. A
     single sparse Livox frame can't be globally registered, so we accumulate a
@@ -216,7 +216,7 @@ def main(
     map_voxel: float = typer.Option(0.1, "--map-voxel"),
     real_name: str = typer.Option("hk_village3", "--real-name", help="scenario dir name for --only real"),
     only: str = typer.Option("", "--only", help="synthetic|real|global (default: synthetic+real)"),
-    # global-relocalizer scenario (Ivan's FPFH+RANSAC)
+    # global-relocalizer scenario (the global FPFH+RANSAC method)
     global_dataset: Path = typer.Option(
         HERE.parents[1] / "data" / "loop_bench" / "outdoor_small_loop", "--global-dataset"),
     global_name: str = typer.Option("outdoor_small_loop", "--global-name"),

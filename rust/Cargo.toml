@@ -1,6 +1,6 @@
 [package]
 name = "fastlio_rs"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 description = "Pure-Rust reimplementation of the FAST-LIO2 LiDAR-inertial odometry algorithm"
 license = "GPL-2.0"

@@ -70,12 +70,20 @@ bool ICPLocalizer::align(M4F &guess)
     CloudType::Ptr aligned_cloud(new CloudType);
     if (m_refine_tgt->size() == 0 || m_rough_tgt->size() == 0)
         return false;
+    // Bound the correspondence search. PCL's default max correspondence distance
+    // is effectively infinite, so on a dense prior map every source point pairs
+    // with its global nearest neighbour and ICP slides into a wrong minimum even
+    // from a good initial guess (and the fitness gate, scored over the same
+    // unbounded pairs, can't reject it). Coarse-to-fine bounds keep rough wide
+    // enough to pull in a ~metre-off guess, then tighten refine for accuracy.
+    m_rough_icp.setMaxCorrespondenceDistance(std::max(m_config.rough_map_resolution, 0.05) * 8.0);
     m_rough_icp.setMaximumIterations(m_config.rough_max_iteration);
     m_rough_icp.setInputSource(m_rough_inp);
     m_rough_icp.setInputTarget(m_rough_tgt);
     m_rough_icp.align(*aligned_cloud, guess);
     if (!m_rough_icp.hasConverged() || m_rough_icp.getFitnessScore() > m_config.rough_score_thresh)
         return false;
+    m_refine_icp.setMaxCorrespondenceDistance(std::max(m_config.refine_map_resolution, 0.02) * 8.0);
     m_refine_icp.setMaximumIterations(m_config.refine_max_iteration);
     m_refine_icp.setInputSource(m_refine_inp);
     m_refine_icp.setInputTarget(m_refine_tgt);

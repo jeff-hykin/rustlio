@@ -22,6 +22,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out = &args[1];
     let files = &args[2..];
 
+    // No config file here; default to Normal (override via RUST_LOG).
+    fastlio_rs::logging::init(fastlio_rs::commons::LogLevel::Normal);
+
     let rec = rerun::RecordingStreamBuilder::new("fastlio2_odom").save(out)?;
 
     // World origin marker for reference.
@@ -35,7 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (i, f) in files.iter().enumerate() {
         let arr: Array2<f64> = read_npy(f)?;
         if arr.nrows() == 0 || arr.ncols() < 4 {
-            eprintln!("skip {} (shape {:?})", f, arr.dim());
+            log::warn!("skip {} (shape {:?})", f, arr.dim());
             continue;
         }
         let traj: Vec<[f32; 3]> = (0..arr.nrows())
@@ -58,9 +61,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .with_radii([0.05])
                 .with_colors([color]),
         )?;
-        println!("logged {} ({} points)", f, arr.nrows());
+        log::debug!("logged {} ({} points)", f, arr.nrows());
     }
 
-    println!("wrote {out}");
+    log::info!("wrote {out}");
     Ok(())
 }

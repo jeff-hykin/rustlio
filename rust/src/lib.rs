@@ -7,5 +7,6 @@ pub mod imu_processor;
 pub mod lidar_processor;
 pub mod map_builder;
 pub mod utils;
+pub mod logging;
 #[cfg(feature = "pcl")]
 pub mod pcl_ffi;

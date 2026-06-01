@@ -33,8 +33,8 @@ fn read_mcap_bag(path: &str, config: &Config) -> Vec<(f64, McapMessage)> {
         } else if topic == config.lidar_topic {
             if config.lidar_type != 1 {
                 if LIDAR_TYPE_WARN.swap(false, std::sync::atomic::Ordering::Relaxed) {
-                    eprintln!(
-                        "Warning: lidar_type={} is not yet supported by the MCAP reader (only Livox custom msg, type 1); skipping lidar messages",
+                    log::warn!(
+                        "lidar_type={} is not yet supported by the MCAP reader (only Livox custom msg, type 1); skipping lidar messages",
                         config.lidar_type
                     );
                 }
@@ -77,18 +77,20 @@ fn parse_imu_cdr(data: &[u8]) -> Option<IMUData> {
     let mut offset = 12 + fid_len;
     offset = (offset + 3) & !3; // align to 4
 
-    if IMU_DEBUG.swap(false, std::sync::atomic::Ordering::Relaxed) {
+    if log::log_enabled!(log::Level::Trace)
+        && IMU_DEBUG.swap(false, std::sync::atomic::Ordering::Relaxed)
+    {
         let fid = std::str::from_utf8(&buf[12..12 + fid_len.saturating_sub(1)]).unwrap_or("?");
-        eprintln!("IMU CDR debug: data_len={}, buf_len={}, fid_len={}, fid='{}', offset_after_fid={}",
+        log::trace!("IMU CDR debug: data_len={}, buf_len={}, fid_len={}, fid='{}', offset_after_fid={}",
             data.len(), buf.len(), fid_len, fid, offset);
         // Print all f64 values from offset onward
         let mut o = (offset + 7) & !7;
-        eprintln!("  aligned offset={}", o);
+        log::trace!("  aligned offset={}", o);
         let mut idx = 0;
         while o + 8 <= buf.len() {
             let v = f64::from_le_bytes(buf[o..o+8].try_into().ok()?);
             if idx < 30 {
-                eprintln!("  f64[{}] @ {}: {:.8}", idx, o, v);
+                log::trace!("  f64[{}] @ {}: {:.8}", idx, o, v);
             }
             o += 8;
             idx += 1;
@@ -113,7 +115,12 @@ fn parse_imu_cdr(data: &[u8]) -> Option<IMUData> {
     let az = f64::from_le_bytes(buf[offset + 16..offset + 24].try_into().ok()?);
 
     Some(IMUData {
-        acc: V3D::new(ax, ay, az) * 10.0,
+        // Livox IMU reports linear acceleration in units of g; convert to m/s^2
+        // with the standard gravity constant so |acc| at rest matches the
+        // gravity state initialised at IESKF::GRAVITY (9.81). The old `* 10.0`
+        // left a ~0.19 m/s^2 vertical residual (10 - 9.81) that integrated into
+        // z-drift. See faithful_check.
+        acc: V3D::new(ax, ay, az) * 9.80665,
         gyro: V3D::new(gx, gy, gz),
         time,
     })
@@ -216,23 +223,24 @@ fn main() {
         .and_then(|s| s.parse().ok())
         .unwrap_or(60.0);
 
-    println!("Loading config from: {}", config_path);
     let config = load_config(config_path);
+    fastlio_rs::logging::init(config.log_level);
+    log::info!("Loading config from: {}", config_path);
 
-    println!("Reading MCAP bag: {}", bag_path);
+    log::info!("Reading MCAP bag: {}", bag_path);
     let messages = read_mcap_bag(bag_path, &config);
     let imu_count = messages.iter().filter(|(_, m)| matches!(m, McapMessage::Imu(_))).count();
     let lidar_count = messages.iter().filter(|(_, m)| matches!(m, McapMessage::Lidar(_))).count();
-    println!("Loaded {} messages ({} IMU, {} LiDAR)", messages.len(), imu_count, lidar_count);
+    log::info!("Loaded {} messages ({} IMU, {} LiDAR)", messages.len(), imu_count, lidar_count);
 
-    println!("Duration limit: {:.0}s", duration_limit);
+    log::debug!("Duration limit: {:.0}s", duration_limit);
 
     let mut builder = MapBuilder::new(config);
 
     let mut imu_buf: Vec<IMUData> = Vec::new();
     let mut odom_count = 0;
     let mut first_odom_time: Option<f64> = None;
-    let mut odom_records: Vec<[f64; 7]> = Vec::new();
+    let mut odom_records: Vec<[f64; 13]> = Vec::new();
 
     for (_log_time, msg) in &messages {
         match msg {
@@ -270,10 +278,12 @@ fn main() {
                         lidar.start_time,
                         state.imu_to_world_trans[0], state.imu_to_world_trans[1], state.imu_to_world_trans[2],
                         state.v[0], state.v[1], state.v[2],
+                        state.g[0], state.g[1], state.g[2],
+                        state.ba[0], state.ba[1], state.ba[2],
                     ]);
 
                     if odom_count % 100 == 0 {
-                        println!(
+                        log::debug!(
                             "odom {}: speed={:.3} m/s  t={:.2}s",
                             odom_count, speed,
                             lidar.start_time - first_odom_time.unwrap_or(lidar.start_time),
@@ -285,17 +295,17 @@ fn main() {
         }
     }
 
-    println!("\nProcessing complete. {} odom outputs.", odom_count);
+    log::info!("Processing complete. {} odom outputs.", odom_count);
 
     if let Some(out) = output_path {
         let rows = odom_records.len();
-        let mut data = Array2::<f64>::zeros((rows, 7));
+        let mut data = Array2::<f64>::zeros((rows, 13));
         for (i, rec) in odom_records.iter().enumerate() {
-            for j in 0..7 {
+            for j in 0..13 {
                 data[[i, j]] = rec[j];
             }
         }
         write_npy(out, &data).expect("Failed to write .npy");
-        println!("Saved {} odom records to {}", rows, out);
+        log::info!("Saved {} odom records to {}", rows, out);
     }
 }

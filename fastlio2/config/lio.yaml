@@ -30,3 +30,6 @@ r_il: [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
 t_il: [-0.011, -0.02329, 0.04412]
 
 lidar_cov_inv: 1000.0
+
+# Console verbosity: silent | normal | detailed | verbose (default: normal)
+log_level: normal

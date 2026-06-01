@@ -111,7 +111,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("config {config_path} not found, using defaults");
         Config::default()
     };
-    println!("Config: {config_path} (filter_num={}, min/max range={}/{})",
+    fastlio_rs::logging::init(config.log_level);
+    log::info!("Config: {config_path} (filter_num={}, min/max range={}/{})",
         config.lidar_filter_num, config.lidar_min_range, config.lidar_max_range);
 
     let rec = rerun::RecordingStreamBuilder::new("fastlio2_render").save(out_path)?;
@@ -134,7 +135,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut reader = PcapReader::new(BufReader::with_capacity(1 << 20, file))?;
     let mut buf: Vec<u8> = Vec::with_capacity(2048);
 
-    println!("Reading {pcap_path} ...");
+    log::info!("Reading {pcap_path} ...");
     while let Some((dport, payload)) = reader.next_packet(&mut buf) {
         if done {
             break;
@@ -304,7 +305,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         if frame_idx % 50 == 0 {
-            println!("frame {frame_idx}: t={t_rel:.1}s pos=({:.2},{:.2},{:.2}) scan={} map={}",
+            log::debug!("frame {frame_idx}: t={t_rel:.1}s pos=({:.2},{:.2},{:.2}) scan={} map={}",
                 pos[0], pos[1], pos[2], scan_xyz.len(), world_map.len());
         }
         frame_idx += 1;
@@ -328,8 +329,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?;
     }
 
-    println!("\nDone. {frame_idx} frames, {imu_count} IMU samples.");
-    println!("World cloud: {} points -> {out_path}", map_xyz.len());
+    log::info!("Done. {frame_idx} frames, {imu_count} IMU samples.");
+    log::info!("World cloud: {} points -> {out_path}", map_xyz.len());
     Ok(())
 }
 

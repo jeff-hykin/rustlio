@@ -16,6 +16,43 @@ pub struct Point {
 
 pub type PointCloud = Vec<Point>;
 
+/// Console verbosity, configured via `log_level` in the YAML config.
+/// Maps onto the standard `log` crate level filter (see [`crate::logging`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum LogLevel {
+    /// No output at all.
+    Silent,
+    /// Key progress, results, and warnings (default).
+    #[default]
+    Normal,
+    /// Adds per-frame progress and extra detail.
+    Detailed,
+    /// Adds low-level per-message debug dumps.
+    Verbose,
+}
+
+impl LogLevel {
+    /// Parse a config string (case-insensitive); `None` if unrecognized.
+    pub fn parse(s: &str) -> Option<LogLevel> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "silent" | "off" | "none" => Some(LogLevel::Silent),
+            "normal" | "info" => Some(LogLevel::Normal),
+            "detailed" | "debug" => Some(LogLevel::Detailed),
+            "verbose" | "trace" => Some(LogLevel::Verbose),
+            _ => None,
+        }
+    }
+
+    pub fn to_level_filter(self) -> log::LevelFilter {
+        match self {
+            LogLevel::Silent => log::LevelFilter::Off,
+            LogLevel::Normal => log::LevelFilter::Info,
+            LogLevel::Detailed => log::LevelFilter::Debug,
+            LogLevel::Verbose => log::LevelFilter::Trace,
+        }
+    }
+}
+
 /// Runtime configuration consumed by `MapBuilder`.
 ///
 /// This is a plain data struct with no YAML/serde coupling. Parse a config
@@ -53,6 +90,8 @@ pub struct Config {
     /// LiDAR field of view in degrees (upstream `mapping.fov_degree`); points
     /// outside half this angle from +x are culled. 360 disables culling.
     pub fov_degree: f64,
+    /// Console verbosity (`log_level`: silent | normal | detailed | verbose).
+    pub log_level: LogLevel,
 }
 
 impl Default for Config {
@@ -84,6 +123,7 @@ impl Default for Config {
             max_velocity: 3.1,
             time_offset_lidar_to_imu: 0.0,
             fov_degree: 360.0,
+            log_level: LogLevel::Normal,
         }
     }
 }
@@ -151,6 +191,7 @@ struct RawConfig {
     max_velocity: Option<f64>,
     time_offset_lidar_to_imu: Option<f64>,
     fov_degree: Option<f64>,
+    log_level: Option<String>,
 }
 
 #[derive(Deserialize, Default)]
@@ -220,6 +261,13 @@ impl RawConfig {
             c.time_offset_lidar_to_imu = v;
         }
         if let Some(v) = self.fov_degree.or(map.fov_degree) { c.fov_degree = v; }
+        if let Some(s) = self.log_level {
+            if let Some(lvl) = LogLevel::parse(&s) {
+                c.log_level = lvl;
+            } else {
+                eprintln!("warning: unknown log_level '{s}', using default");
+            }
+        }
         c
     }
 }

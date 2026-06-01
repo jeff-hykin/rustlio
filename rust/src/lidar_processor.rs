@@ -181,7 +181,7 @@ impl LidarProcessor {
             use std::sync::atomic::{AtomicBool, Ordering};
             static WARNED: AtomicBool = AtomicBool::new(false);
             if !WARNED.swap(true, Ordering::Relaxed) {
-                eprintln!("NO Effective Points! (suppressing further occurrences)");
+                log::warn!("no effective points for LiDAR update (suppressing further occurrences)");
             }
             return;
         }

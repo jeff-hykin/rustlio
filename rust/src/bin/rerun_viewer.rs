@@ -171,18 +171,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let output_path = args.get(3).map(|s| s.as_str());
     let save_mode = output_path.is_some();
 
-    println!("Loading config from: {}", config_path);
     let config = load_config(config_path);
+    fastlio_rs::logging::init(config.log_level);
+    log::info!("Loading config from: {}", config_path);
 
-    println!("Reading MCAP bag: {}", bag_path);
+    log::info!("Reading MCAP bag: {}", bag_path);
     let messages = read_mcap_bag(bag_path, &config);
-    println!("Loaded {} messages", messages.len());
+    log::info!("Loaded {} messages", messages.len());
 
     let rec = if let Some(path) = output_path {
-        println!("Saving to: {}", path);
+        log::info!("Saving to: {}", path);
         rerun::RecordingStreamBuilder::new("fastlio2").save(path)?
     } else {
-        println!("Opening Rerun viewer...");
+        log::info!("Opening Rerun viewer...");
         rerun::RecordingStreamBuilder::new("fastlio2").spawn()?
     };
 
@@ -279,7 +280,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     rec.log("metrics/vz", &rerun::Scalars::single(state.v[2]))?;
 
                     if odom_count % 100 == 0 {
-                        println!("frame {}: pos=({:.2}, {:.2}, {:.2}) speed={:.2} m/s  t={:.1}s",
+                        log::debug!("frame {}: pos=({:.2}, {:.2}, {:.2}) speed={:.2} m/s  t={:.1}s",
                             odom_count, pos[0], pos[1], pos[2], speed, t_rel);
                     }
                     odom_count += 1;
@@ -289,9 +290,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if save_mode {
-        println!("\nDone. {} frames saved to {}", odom_count, output_path.unwrap());
+        log::info!("Done. {} frames saved to {}", odom_count, output_path.unwrap());
     } else {
-        println!("\nDone. {} frames sent to Rerun viewer.", odom_count);
+        log::info!("Done. {} frames sent to Rerun viewer.", odom_count);
     }
     Ok(())
 }

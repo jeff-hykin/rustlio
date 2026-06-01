@@ -77,11 +77,12 @@ impl MapBuilder {
     /// held per-instance, so independent `MapBuilder`s never interfere.
     /// Returns `true` when the frame was rejected.
     fn reject_if_over_speed(&mut self, state_pre_update: State) -> bool {
-        let vnorm = self.kf.x.v.norm();
-        if self.config.max_velocity > 0.0 && vnorm > self.config.max_velocity {
-            let mut clean = self.last_good_state.clone().unwrap_or(state_pre_update);
-            clean.v = V3D::zeros();
-            self.kf.x = clean;
+        let post_update_speed = self.kf.x.v.norm();
+        if self.config.max_velocity > 0.0 && post_update_speed > self.config.max_velocity {
+            let mut recovered_state =
+                self.last_good_state.clone().unwrap_or(state_pre_update);
+            recovered_state.v = V3D::zeros();
+            self.kf.x = recovered_state;
             true
         } else {
             self.last_good_state = Some(self.kf.x.clone());
@@ -99,26 +100,26 @@ mod tests {
         let mut config = Config::default();
         config.max_velocity = 3.0;
 
-        let mut a = MapBuilder::new(config.clone());
-        let b = MapBuilder::new(config);
+        let mut mapper = MapBuilder::new(config.clone());
+        let second_mapper = MapBuilder::new(config);
 
         // A sane frame is accepted and remembered as the last good state.
-        a.kf.x.t_wi = V3D::new(1.0, 0.0, 0.0);
-        a.kf.x.v = V3D::new(1.0, 0.0, 0.0);
-        let pre = a.kf.x.clone();
-        assert!(!a.reject_if_over_speed(pre));
-        assert!(a.last_good_state.is_some());
+        mapper.kf.x.t_wi = V3D::new(1.0, 0.0, 0.0);
+        mapper.kf.x.v = V3D::new(1.0, 0.0, 0.0);
+        let pre_update_state = mapper.kf.x.clone();
+        assert!(!mapper.reject_if_over_speed(pre_update_state));
+        assert!(mapper.last_good_state.is_some());
 
         // An over-speed frame is rejected: velocity zeroed, pose rolled back to
         // the last good one, not the teleported pre-update value.
-        let pre = a.kf.x.clone();
-        a.kf.x.t_wi = V3D::new(99.0, 0.0, 0.0);
-        a.kf.x.v = V3D::new(50.0, 0.0, 0.0);
-        assert!(a.reject_if_over_speed(pre));
-        assert_eq!(a.kf.x.v, V3D::zeros());
-        assert_eq!(a.kf.x.t_wi, V3D::new(1.0, 0.0, 0.0));
+        let pre_update_state = mapper.kf.x.clone();
+        mapper.kf.x.t_wi = V3D::new(99.0, 0.0, 0.0);
+        mapper.kf.x.v = V3D::new(50.0, 0.0, 0.0);
+        assert!(mapper.reject_if_over_speed(pre_update_state));
+        assert_eq!(mapper.kf.x.v, V3D::zeros());
+        assert_eq!(mapper.kf.x.t_wi, V3D::new(1.0, 0.0, 0.0));
 
         // The second mapper shares no state with the first.
-        assert!(b.last_good_state.is_none());
+        assert!(second_mapper.last_good_state.is_none());
     }
 }

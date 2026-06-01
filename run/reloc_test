@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Long benchmark of the CURRENT relocalization algorithm (C++ ICPLocalizer,
+# from localizer/src/localizers) and prints a performance table.
+#
+# Designed for apples-to-apples comparison against a future (enhanced) Rust
+# relocalizer: the scenarios + scoring are backend-agnostic. To benchmark the
+# Rust version once it exists, point --backend at a binary implementing the same
+# CLI contract (see reloc_bench/harness/reloc_bench.cpp):
+#     ./run/reloc_test --backend rust/target/release/reloc_bench
+#
+# Usage:
+#   ./run/reloc_test                 # build (if needed), generate scenarios, run
+#   ./run/reloc_test --regen         # force-regenerate scenarios
+#   ./run/reloc_test --quick         # fewer trials (synthetic only, fast)
+#   ./run/reloc_test --json out.json # dump the table as JSON for diffing
+#   ./run/reloc_test -- --cfg refine_score_thresh=0.2   # pass-through to driver
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+BENCH="$ROOT/reloc_bench"
+HARNESS="$BENCH/harness/build/reloc_bench"
+SCRIPTS="$BENCH/scripts"
+PY=(uv run --quiet --with numpy --with scipy --with typer python)
+
+REGEN=0; QUICK=0; PASSTHRU=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --regen) REGEN=1; shift ;;
+    --quick) QUICK=1; shift ;;
+    --) shift; PASSTHRU+=("$@"); break ;;
+    *) PASSTHRU+=("$1"); shift ;;
+  esac
+done
+
+# 1. Build the C++ harness if missing.
+if [[ ! -x "$HARNESS" ]]; then
+  echo ">> building C++ relocalizer harness..."
+  bash "$BENCH/harness/build.sh"
+fi
+
+# 2. Generate scenarios if missing (or --regen).
+if [[ $REGEN -eq 1 || ! -f "$BENCH/scenarios/synthetic_room/manifest.json" ]]; then
+  echo ">> generating scenarios..."
+  if [[ $QUICK -eq 1 ]]; then
+    (cd "$SCRIPTS" && "${PY[@]}" gen_scenarios.py --only synthetic --reps 5)
+  else
+    (cd "$SCRIPTS" && "${PY[@]}" gen_scenarios.py)
+  fi
+fi
+
+# 3. Run the benchmark. --quick scopes to the fast synthetic scenario.
+echo ">> benchmarking current relocalizer..."
+SCOPE=()
+[[ $QUICK -eq 1 ]] && SCOPE=(--scenario synthetic_room)
+(cd "$SCRIPTS" && "${PY[@]}" bench_reloc.py --backend "$HARNESS" "${SCOPE[@]}" "${PASSTHRU[@]}")

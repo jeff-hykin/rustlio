@@ -23,13 +23,13 @@
 
 #include "pgos/commons.h"
 #include "pgos/simple_pgo.h"
-#include "ivan_pgo.h"
+#include "plane_pgo.h"
 
 #include <pcl/features/normal_3d_omp.h>
 #include <pcl/registration/icp.h>
 
 // Diagnostic: load two xyz point files, run the SAME PCL point-to-plane ICP that
-// ivan_pgo uses, and print the resulting transform -- so it can be compared
+// plane_pgo uses, and print the resulting transform -- so it can be compared
 // against the Rust ICP on byte-identical input.
 static int icp_test(const std::string &src_path, const std::string &tgt_path) {
     auto load = [](const std::string &p) {
@@ -257,7 +257,7 @@ int main(int argc, char **argv) {
     std::cerr << "[pgo_bench] loaded " << frames.size() << " frames\n";
 
     std::string impl = kv.count("impl") ? kv["impl"] : "stock";
-    if (impl == "ivan")
-        return run<IvanPGO>(cfg, frames, out);
+    if (impl == "plane")
+        return run<PlanePgo>(cfg, frames, out);
     return run<SimplePGO>(cfg, frames, out);
 }

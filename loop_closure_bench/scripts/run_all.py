@@ -27,19 +27,19 @@ GATED = [
     "max_loop_offset=1.5",
     "loop_source_submap_half_range=2",
 ]
-# Ivan's approach: point-to-plane ICP, bounded correspondence, nearest candidate,
+# the point-to-plane approach: point-to-plane ICP, bounded correspondence, nearest candidate,
 # decoupled rot/trans noise. loop_score_tresh is ICP fitness (m^2) here.
-IVAN = [
-    "impl=ivan",
+PLANE = [
+    "impl=plane",
     "loop_time_tresh=25",
     "loop_search_radius=2.0",
     "max_icp_correspondence_dist=1.0",
     "loop_score_tresh=0.3",
-    "loop_submap_half_range=10",        # Ivan's target submap range
-    "loop_source_submap_half_range=0",  # Ivan's source = single keyframe
-    "submap_resolution=0.2",            # Ivan's default
+    "loop_submap_half_range=10",        # target submap range
+    "loop_source_submap_half_range=0",  # source = single keyframe
+    "submap_resolution=0.2",            # the reference default
 ]
-# Rust port of Ivan's approach (backend=rust). Same params + a max-offset reject.
+# Rust port of the point-to-plane approach (backend=rust). Same params + a max-offset reject.
 RUST = [
     "backend=rust",
     "loop_time_thresh=25",
@@ -65,7 +65,7 @@ def rust_cfg(dataset: str) -> list[str]:
     return RUST_OUTDOOR if "outdoor" in dataset else RUST
 
 
-CONFIGS = (("stock", STOCK), ("gated", GATED), ("ivan", IVAN), ("rust", RUST))
+CONFIGS = (("stock", STOCK), ("gated", GATED), ("plane", PLANE), ("rust", RUST))
 
 
 def run_one(ds: Path, yaw: float, cfg: list[str], rrd: str | None = None) -> dict:

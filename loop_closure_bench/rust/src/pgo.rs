@@ -1,7 +1,7 @@
-//! Ivan-style pose-graph optimization in Rust: SE(3) factor graph (factrs) with
+//! point-to-plane pose-graph optimization in Rust: SE(3) factor graph (factrs) with
 //! odometry between-factors + point-to-plane ICP loop closures and a decoupled
 //! rotation/translation loop noise model. Mirrors loop_closure_bench/harness/
-//! ivan_pgo.cpp.
+//! plane_pgo.cpp.
 use std::collections::HashMap;
 
 use factrs::core::{

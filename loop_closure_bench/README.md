@@ -11,8 +11,7 @@ C++ PGO on the drifted poses, and measure how well it recovers the original.
 
 ## Where the data comes from
 
-Six recordings (`hk_village1..6`) from the dimos repo (branch
-`autoresearch/ivan/pgo_go2`), pulled from Git LFS. Each is a Go2 looping a small
+Six recordings (`hk_village1..6`) from the dimos repo (autoresearch PGO recording set), pulled from Git LFS. Each is a Go2 looping a small
 (~7×6 m) courtyard 3–4 times with a single 10 cm AprilTag (id 10) on a wall — an
 ideal loop-closure scenario (repeated revisits of the same place).
 
@@ -55,7 +54,7 @@ dimos .db  --export_dataset.py-->  data/loop_bench/<name>/
 - **Trajectory ATE (m)** vs the clean FAST-LIO trajectory, before (drifted) and
   after PGO. The primary "how much can it handle" number.
 - **Marker spread (m)** — sum of pairwise distances between world positions of
-  the same AprilTag across detections (Ivan's eval metric). Drift smears it;
+  the same AprilTag across detections (the marker-spread metric). Drift smears it;
   good loop closure tightens it. Computed by applying the PGO world-correction
   to the camera poses, so it needs no AprilTag detection at run time.
 - **Loop recall** — fraction of groundtruth marker-revisit loop events for which
@@ -76,7 +75,7 @@ brew build once brew Eigen reached 5.0.1. The binary's rpath is baked to the nix
 GTSAM lib, so it runs standalone (no `DYLD_LIBRARY_PATH`).
 
 `pgo_bench` is a standalone driver that feeds the neutral files through
-`SimplePGO` (or `IvanPGO` with `impl=ivan`) exactly as `pgo_node.cpp`'s `timerCB`
+`SimplePGO` (or `PlanePgo` with `impl=plane`) exactly as `pgo_node.cpp`'s `timerCB`
 does, then dumps the pose graph
 (raw + optimized keyframe poses) and detected loop edges (with ICP score +
 offset) as JSON.
@@ -105,10 +104,10 @@ drifted, green = PGO-corrected, blue = loop edges.
 ## PGO implementations
 
 `pgo_bench impl=stock` (default) drives the in-tree C++ `SimplePGO` (point-to-
-point PCL ICP). `pgo_bench impl=ivan` drives `ivan_pgo.cpp` — a port of dimos
+point PCL ICP). `pgo_bench impl=plane` drives `plane_pgo.cpp` — a port of dimos
 `pgo.py`'s loop closure (point-to-plane PCL ICP with normals, single-keyframe
 source submap, decoupled rotation/translation noise) sharing the same iSAM2
-backbone. `run_all.py` benchmarks stock / gated / ivan together.
+backbone. `run_all.py` benchmarks stock / gated / plane together.
 
 ## Cloud frame (important)
 

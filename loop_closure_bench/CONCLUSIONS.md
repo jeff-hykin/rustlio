@@ -2,7 +2,7 @@
 
 **TL;DR — once a cloud-frame bug in the harness was fixed, the stock C++
 `SimplePGO` is *not* broken: it modestly reduces drift on most recordings with
-only a small zero-drift perturbation. A faithful C++ port of Ivan's point-to-
+only a small zero-drift perturbation. A faithful C++ port of the point-to-
 plane approach is competitive — better on some recordings, slightly worse on
 others — but there is no dramatic winner. The dominant factor was getting the
 input geometry right, not the ICP variant.**
@@ -14,7 +14,7 @@ input geometry right, not the ICP variant.**
 > the harness fed them to `SimplePGO` as if they were **body frame** and
 > re-applied each keyframe's pose — double-transforming every loop-closure
 > submap. With correct body-frame clouds (the exporter now unregisters
-> world→body via the inverse pose, as Ivan's code does) the numbers below are
+> world→body via the inverse pose, as the reference does) the numbers below are
 > completely different. Lesson: a measurement harness needs its own sanity
 > checks; the "PGO is broken" story was the harness lying.
 
@@ -27,7 +27,7 @@ input geometry right, not the ICP variant.**
   body clouds, and measure trajectory ATE (RMSE vs clean) before/after, AprilTag
   marker spread, and loop recall vs marker-revisit groundtruth.
 - Three configs: **stock** (original point-to-point ICP, 10 m correspondence),
-  **gated** (bounded correspondence + max-offset reject), **ivan** (point-to-
+  **gated** (bounded correspondence + max-offset reject), **plane** (point-to-
   plane ICP with target normals + decoupled rot/trans noise, ported from dimos
   `pgo.py`).
 
@@ -62,13 +62,13 @@ of stock almost everywhere. It was designed to kill the catastrophic false loops
 from the buggy world-frame clouds; with correct clouds those don't occur, so it
 has little left to do. Useful as a guardrail, not a meaningful improvement.
 
-## Finding 4 — Ivan's point-to-plane port is competitive, not a clear win
+## Finding 4 — the point-to-plane port is competitive, not a clear win
 
-Faithful C++ port of Ivan's loop closure (point-to-plane PCL ICP with normals on
+Faithful C++ port of the point-to-plane loop closure (point-to-plane PCL ICP with normals on
 source+target, single-keyframe source submap, target half-range 10, decoupled
 noise: translation variance = ICP fitness, rotation variance fixed 0.05 rad²):
 
-| dataset | drifted | stock | gated | ivan |
+| dataset | drifted | stock | gated | plane |
 |---|---|---|---|---|
 | hk_village1 | 1.44 | 1.31 | 1.31 | **1.17** |
 | hk_village2 | 2.66 | **2.14** | 2.14 | 2.26 |
@@ -77,30 +77,30 @@ noise: translation variance = ICP fitness, rotation variance fixed 0.05 rad²):
 | hk_village5 | 0.96 | 0.94 | **0.93** | 0.98 |
 | hk_village6 | 1.09 | 1.08 | 1.02 | **0.96** |
 
-Zero-drift perturbation: ivan beats stock on 4/6 (hk3 0.05 vs 0.13, hk4 0.35 vs
+Zero-drift perturbation: point-to-plane beats stock on 4/6 (hk3 0.05 vs 0.13, hk4 0.35 vs
 0.76, hk5 0.14 vs 0.18, hk6 0.32 vs 0.51) and is worse on hk1/hk2.
 
-Ivan wins drift correction on hk1/hk6 and is the only config that doesn't worsen
+point-to-plane wins drift correction on hk1/hk6 and is the only config that doesn't worsen
 hk4, but loses on hk2/hk3/hk5. **No approach dominates; differences are sub-metre
 and often <0.2 m.** Point-to-plane's anti-sliding advantage doesn't show up
 strongly here because, with correctly-framed clouds, the scenes don't trigger
 the catastrophic sliding it's designed to prevent. Caveats on the port: PCL's
 point-to-plane + normal estimation on voxel-downsampled submaps is not identical
-to Ivan's Open3D tensor pipeline (inlier-RMSE fitness, target-only normals), so a
+to the reference Open3D tensor pipeline (inlier-RMSE fitness, target-only normals), so a
 more faithful Open3D-backed port might shift these numbers.
 
 ## Finding 5 — on the 549 m outdoor loop, PGO clearly helps
 
 `outdoor_small_loop` (Go2 + Mid-360, 549 m, AprilTag id 7), correct body clouds:
 
-| yaw/√m | drifted | stock | gated | ivan |
+| yaw/√m | drifted | stock | gated | plane |
 |---:|---:|---:|---:|---:|
 | 0.0 | 0.00 | 0.31 | 0.11 | **0.04** |
 | 0.1 | 3.67 | 1.84 | 2.16 | **1.52** |
 | 0.3 | 11.16 | 11.58 | **10.59** | 11.23 |
 
 At moderate drift (yaw=0.1, 3.67 m error) PGO cuts ATE by **50–59%** (stock
-→1.84, ivan →1.52) — the clearest benefit anywhere in the suite, and ivan's
+→1.84, plane →1.52) — the clearest benefit anywhere in the suite, and the point-to-plane variant's
 point-to-plane is best at low/moderate drift (zero-drift 0.04 m). At 11 m drift
 the error exceeds what ICP can bridge from the drifted initial guess, so gains
 are marginal. (This is the recording whose *buggy* world-frame clouds had earlier
@@ -108,12 +108,12 @@ shown stock "corrupting" 0→2.63 m — the fix flipped it to a clear win.)
 
 ## Finding 6 — the Rust port (`pgo_bench_rs`) is competitive indoors
 
-`loop_closure_bench/rust/` reimplements Ivan's approach in pure Rust (factrs SE(3)
+`loop_closure_bench/rust/` reimplements the point-to-plane approach in pure Rust (factrs SE(3)
 factor graph + a from-scratch point-to-plane ICP), benchmarked head-to-head via
 `backend=rust`. At the drift-correction task (yaw=1.0) on the six indoor
-hk_village recordings it matches or beats the C++ `ivan` config:
+hk_village recordings it matches or beats the C++ `plane` config:
 
-| dataset | drifted | C++ ivan | Rust |
+| dataset | drifted | C++ plane | Rust |
 |---|---|---|---|
 | hk_village1 | 1.44 | 1.17 | **1.03** |
 | hk_village2 | 2.66 | 2.26 | **2.14** |
@@ -124,12 +124,12 @@ hk_village recordings it matches or beats the C++ `ivan` config:
 | **mean** | 1.67 | 1.56 | **1.51** |
 
 Rust wins 4/6 and the aggregate. Its zero-drift perturbation is a bit higher than
-C++ ivan's (residual ICP sliding), so it trades a little clean-trajectory
+C++ plane's (residual ICP sliding), so it trades a little clean-trajectory
 stillness for slightly stronger drift correction.
 
 **Known gap — outdoor.** On `outdoor_small_loop` (549 m open scene) the Rust port
 does *not* match C++: its loops don't help (≈neutral with a tight reject, mildly
-corrupting otherwise), whereas C++ ivan cuts ATE ~60%. Root cause is isolated to
+corrupting otherwise), whereas C++ plane cuts ATE ~60%. Root cause is isolated to
 the ICP: the from-scratch point-to-plane converges to a ~1.3 m-offset minimum on
 the open, ground-plane-dominated outdoor submaps where PCL's mature ICP converges
 to ~0 — verified identical input submaps, and the factrs graph backbone is fine

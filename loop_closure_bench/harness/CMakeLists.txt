@@ -28,7 +28,7 @@ set(PGO_SRC_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../pgo/src")
 
 add_executable(pgo_bench
   pgo_bench.cpp
-  ivan_pgo.cpp
+  plane_pgo.cpp
   ${PGO_SRC_DIR}/pgos/commons.cpp
   ${PGO_SRC_DIR}/pgos/simple_pgo.cpp)
 

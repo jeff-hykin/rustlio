@@ -1,4 +1,4 @@
-#include "ivan_pgo.h"
+#include "plane_pgo.h"
 
 #include <pcl/features/normal_3d_omp.h>
 #include <pcl/common/transforms.h>
@@ -16,7 +16,7 @@ using CloudNT = pcl::PointCloud<PointNT>;
 namespace
 {
 // Estimate normals on a PointXYZI cloud and return a PointNormal cloud
-// (positions + normals) for point-to-plane ICP. Radius mirrors Ivan's
+// (positions + normals) for point-to-plane ICP. Radius mirrors the reference
 // estimate_normals(max_nn=30, radius=0.3).
 CloudNT::Ptr with_normals(const CloudType::Ptr &cloud, double radius)
 {
@@ -46,7 +46,7 @@ CloudNT::Ptr with_normals(const CloudType::Ptr &cloud, double radius)
 }
 }  // namespace
 
-IvanPGO::IvanPGO(const Config &config) : m_config(config)
+PlanePgo::PlanePgo(const Config &config) : m_config(config)
 {
     gtsam::ISAM2Params params;
     params.relinearizeThreshold = 0.01;
@@ -58,7 +58,7 @@ IvanPGO::IvanPGO(const Config &config) : m_config(config)
     m_t_offset.setZero();
 }
 
-bool IvanPGO::isKeyPose(const PoseWithTime &pose)
+bool PlanePgo::isKeyPose(const PoseWithTime &pose)
 {
     if (m_key_poses.empty())
         return true;
@@ -68,7 +68,7 @@ bool IvanPGO::isKeyPose(const PoseWithTime &pose)
     return dt > m_config.key_pose_delta_trans || dd > m_config.key_pose_delta_deg;
 }
 
-bool IvanPGO::addKeyPose(const CloudWithPose &cwp)
+bool PlanePgo::addKeyPose(const CloudWithPose &cwp)
 {
     if (!isKeyPose(cwp.pose))
         return false;
@@ -101,7 +101,7 @@ bool IvanPGO::addKeyPose(const CloudWithPose &cwp)
     return true;
 }
 
-CloudType::Ptr IvanPGO::getSubMap(int idx, int half_range, double resolution)
+CloudType::Ptr PlanePgo::getSubMap(int idx, int half_range, double resolution)
 {
     int lo = std::max(0, idx - half_range);
     int hi = std::min(static_cast<int>(m_key_poses.size()) - 1, idx + half_range);
@@ -122,7 +122,7 @@ CloudType::Ptr IvanPGO::getSubMap(int idx, int half_range, double resolution)
     return ret;
 }
 
-void IvanPGO::searchForLoopPairs()
+void PlanePgo::searchForLoopPairs()
 {
     if (m_key_poses.size() < 10)
         return;
@@ -151,7 +151,7 @@ void IvanPGO::searchForLoopPairs()
         return;
 
     // radiusSearch returns neighbours sorted by distance; take the NEAREST that
-    // also satisfies the min time gap (Ivan sorts candidates and picks closest).
+    // also satisfies the min time gap (sort candidates and pick the closest).
     int loop_idx = -1;
     for (size_t k = 0; k < ids.size(); ++k)
     {
@@ -177,7 +177,7 @@ void IvanPGO::searchForLoopPairs()
             };
             w(std::string(pfx) + "_src.xyz", source);
             w(std::string(pfx) + "_tgt.xyz", target);
-            std::cerr << "[ivan] dumped src=" << source->size() << " tgt=" << target->size()
+            std::cerr << "[plane] dumped src=" << source->size() << " tgt=" << target->size()
                       << " (src_kf=" << cur_idx << " tgt_kf=" << loop_idx << ")\n";
         }
     }
@@ -226,12 +226,12 @@ void IvanPGO::searchForLoopPairs()
     m_history_pairs.emplace_back(pair.target_id, pair.source_id);
     m_last_loop_time = cur_time;
     if (std::getenv("ICP_LOG"))
-        std::cerr << "[ivan loop] src=" << cur_idx << " tgt=" << loop_idx
+        std::cerr << "[plane loop] src=" << cur_idx << " tgt=" << loop_idx
                   << " fitness=" << fitness << " icp_t=" << dt.norm()
                   << " offset_t=" << pair.t_offset.norm() << "\n";
 }
 
-void IvanPGO::smoothAndUpdate()
+void PlanePgo::smoothAndUpdate()
 {
     bool has_loop = !m_cache_pairs.empty();
     for (const LoopPair &pair : m_cache_pairs)

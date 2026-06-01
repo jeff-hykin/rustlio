@@ -5,7 +5,7 @@
 # Compares three loop-closure configs on each dataset, under injected odom drift:
 #   stock  - the in-tree C++ SimplePGO (point-to-point PCL ICP, 10 m corr.)
 #   gated  - bounded ICP correspondence + max-offset reject (false-loop guard)
-#   ivan   - port of dimos pgo.py: point-to-plane ICP + decoupled rot/trans noise
+#   plane  - port of dimos pgo.py: point-to-plane ICP + decoupled rot/trans noise
 #
 # Reads the neutral files in data/loop_bench/<dataset>/ (clouds.bin, the clean
 # FAST-LIO trajectory, AprilTag groundtruth). Those are produced once by
@@ -41,7 +41,7 @@ if [[ $REBUILD -eq 1 || ! -x "$HARNESS" ]]; then
   bash "$BENCH/harness/build_harness.sh"
 fi
 
-# 1b. Build the Rust port (the `rust` config benchmarks Ivan's PGO in Rust).
+# 1b. Build the Rust port (the `rust` config benchmarks the point-to-plane PGO in Rust).
 if [[ $REBUILD -eq 1 || ! -x "$RUST_HARNESS" ]]; then
   echo ">> building Rust PGO harness (cargo)..."
   ( cd "$BENCH/rust" && cargo build --release )
@@ -63,7 +63,7 @@ fi
 # Default drift levels if none requested.
 [[ " ${PASSTHRU[*]} " =~ " --yaw " ]] || PASSTHRU+=(--yaw 0.0 1.0)
 
-echo ">> benchmarking PGO loop closure (stock / gated / ivan)..."
+echo ">> benchmarking PGO loop closure (stock / gated / plane)..."
 (cd "$BENCH/scripts" && "${PY[@]}" run_all.py "${PASSTHRU[@]}")
 
 TSV="$BENCH/scripts/results.tsv"

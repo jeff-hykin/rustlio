@@ -1,9 +1,9 @@
-# pgo_bench_rs — Rust port of Ivan's PGO loop closure
+# pgo_bench_rs — Rust port of the point-to-plane PGO loop closure
 
 A pure-Rust reimplementation of the dimos `pgo.py` loop-closure approach, drop-in
 compatible with the C++ benchmark harness (same `--clouds --poses --out key=val`
 CLI and the same keyframes/loops JSON), so `run/pgo_bench` benchmarks it head-to-
-head against the C++ `stock` / `gated` / `ivan` configs (`backend=rust`).
+head against the C++ `stock` / `gated` / `plane` configs (`backend=rust`).
 
 ## Pieces
 - `io.rs` — read `clouds.bin` (body-frame) + `lidar_poses.tum`, write the JSON.

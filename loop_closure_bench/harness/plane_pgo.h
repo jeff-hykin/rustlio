@@ -1,6 +1,6 @@
 #pragma once
-// Ivan-style PGO loop closure, ported from dimos pgo.py (branch
-// autoresearch/ivan/pgo_go2). Same GTSAM iSAM2 backbone as SimplePGO, but the
+// Point-to-plane PGO loop closure, ported from dimos pgo.py (branch
+// autoresearch PGO recordings). Same GTSAM iSAM2 backbone as SimplePGO, but the
 // loop-closure registration is the part that differs and matters:
 //
 //   * point-to-plane ICP (target normals) instead of point-to-point -- normals
@@ -26,10 +26,10 @@
 #include <memory>
 #include <vector>
 
-class IvanPGO
+class PlanePgo
 {
 public:
-    explicit IvanPGO(const Config &config);
+    explicit PlanePgo(const Config &config);
 
     bool addKeyPose(const CloudWithPose &cloud_with_pose);  // returns true if a keyframe was added
     void searchForLoopPairs();

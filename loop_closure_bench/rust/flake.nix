@@ -1,5 +1,5 @@
 {
-  description = "pgo_bench_rs — Rust port of Ivan's PGO loop closure";
+  description = "pgo_bench_rs — Rust port of the point-to-plane PGO loop closure";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";

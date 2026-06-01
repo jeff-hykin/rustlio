@@ -1,4 +1,4 @@
-//! Rust port of the C++ pgo_bench harness driving the Rust Ivan-style PGO.
+//! Rust port of the C++ pgo_bench harness driving the Rust point-to-plane PGO.
 //! Same CLI contract: `--clouds f --poses f --out f [key=val ...]`.
 mod icp;
 mod io;

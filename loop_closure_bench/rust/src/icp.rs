@@ -1,4 +1,4 @@
-//! Point-to-plane ICP (the core of Ivan's loop closure). Normals on the target
+//! Point-to-plane ICP (the core of the point-to-plane loop closure). Normals on the target
 //! resolve the "slide along a wall" ambiguity that made naive point-to-point ICP
 //! accept multi-metre false alignments.
 use kiddo::{KdTree, SquaredEuclidean};

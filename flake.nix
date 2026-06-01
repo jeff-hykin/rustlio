@@ -14,9 +14,11 @@
       in {
         packages.default = pkgs.rustPlatform.buildRustPackage {
           pname = "fastlio2";
-          version = "0.1.0";
+          version = "0.2.2";
           src = ./rust;
           cargoLock.lockFile = ./rust/Cargo.lock;
+          # `nix run .#default` -> the odom CLI (two bins are built).
+          meta.mainProgram = "fastlio2";
         };
 
         devShells.default = pkgs.mkShell {

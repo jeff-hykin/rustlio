@@ -5,8 +5,10 @@
 use std::collections::HashMap;
 
 use factrs::core::{
-    BetweenResidual, GaussNewton, GaussianNoise, Graph, PriorResidual, Values, SE3, SO3,
+    BetweenResidual, GaussianNoise, GemanMcClure, Graph, LevenMarquardt, PriorResidual, Values, SE3,
+    SO3,
 };
+use factrs::optimizers::LevenParams;
 use factrs::traits::*;
 use factrs::{assign_symbols, fac};
 use kiddo::{KdTree, SquaredEuclidean};
@@ -32,6 +34,11 @@ pub struct PgoConfig {
     pub min_icp_inliers: usize,
     pub min_keyframes_for_loop: usize,
     pub max_loop_offset: f64, // reject loops whose ICP correction exceeds this (0 = off)
+    pub loop_rot_var: f64,    // loop rotation noise variance (rad^2)
+    pub loop_trans_floor: f64, // loop translation noise variance floor (m^2); higher = distrust loop translation
+    pub loop_huber_k: f64,    // (unused legacy) Huber threshold
+    pub loop_gm_c: f64,       // Geman-McClure scale (whitened units) when loop_robust=1
+    pub loop_robust: bool,    // apply Geman-McClure kernel to loop factors
 }
 
 impl Default for PgoConfig {
@@ -51,6 +58,11 @@ impl Default for PgoConfig {
             min_icp_inliers: 10,
             min_keyframes_for_loop: 10,
             max_loop_offset: 0.0,
+            loop_rot_var: 0.05,
+            loop_trans_floor: 0.01,
+            loop_huber_k: 5.0,
+            loop_gm_c: 3.0,
+            loop_robust: false,
         }
     }
 }
@@ -69,6 +81,7 @@ pub struct LoopEdge {
     pub ts_source: f64,
     pub offset: Isometry3<f64>,
     pub score: f64,
+    pub icp_t: f64, // magnitude of the ICP correction (≈0 = no slide on clean data)
 }
 
 pub struct Pgo {
@@ -78,6 +91,10 @@ pub struct Pgo {
     pub history: Vec<LoopEdge>,
     last_loop_ts: f64,
     world_correction: Isometry3<f64>,
+}
+
+pub fn voxel_downsample_pub(pts: &[Vector3<f64>], res: f64) -> Vec<Vector3<f64>> {
+    voxel_downsample(pts, res)
 }
 
 fn voxel_downsample(pts: &[Vector3<f64>], res: f64) -> Vec<Vector3<f64>> {
@@ -222,8 +239,42 @@ impl Pgo {
             ts_source: cur.ts,
             offset,
             score: res.fitness,
+            icp_t: res.transform.translation.vector.norm(),
         });
         self.last_loop_ts = cur_ts;
+    }
+
+    // Build the pose graph (prior + odometry + loop factors). `robust` toggles a
+    // Geman-McClure kernel on the LOOP factors only (odometry/prior stay L2).
+    fn build_graph(&self, robust: bool) -> Graph {
+        let mut graph = Graph::new();
+        let prior_noise = GaussianNoise::from_split_sigma(1e-6, 1e-6);
+        graph.add_factor(fac![PriorResidual::new(to_se3(&self.keyposes[0].local)), X(0), prior_noise]);
+        for i in 1..self.keyposes.len() {
+            let delta = self.keyposes[i - 1].local.inverse() * self.keyposes[i].local;
+            graph.add_factor(
+                fac![BetweenResidual::new(to_se3(&delta)), (X((i - 1) as u32), X(i as u32)), (1e-3, 1e-2) as std],
+            );
+        }
+        for lp in &self.history {
+            let rot_sig = self.cfg.loop_rot_var.sqrt();
+            let trans_sig = lp.score.max(self.cfg.loop_trans_floor).sqrt();
+            if robust {
+                graph.add_factor(fac![
+                    BetweenResidual::new(to_se3(&lp.offset)),
+                    (X(lp.target as u32), X(lp.source as u32)),
+                    (rot_sig, trans_sig) as std,
+                    GemanMcClure::new(self.cfg.loop_gm_c)
+                ]);
+            } else {
+                graph.add_factor(fac![
+                    BetweenResidual::new(to_se3(&lp.offset)),
+                    (X(lp.target as u32), X(lp.source as u32)),
+                    (rot_sig, trans_sig) as std
+                ]);
+            }
+        }
+        graph
     }
 
     fn smooth_and_update(&mut self) {
@@ -236,34 +287,24 @@ impl Pgo {
         for (i, kp) in self.keyposes.iter().enumerate() {
             values.insert(X(i as u32), to_se3(&kp.optimized));
         }
-        let mut graph = Graph::new();
-        // Tight prior pinning keyframe 0 at its odom pose.
-        let prior_noise = GaussianNoise::from_split_sigma(1e-6, 1e-6);
-        graph.add_factor(fac![PriorResidual::new(to_se3(&self.keyposes[0].local)), X(0), prior_noise]);
-        // Odometry between-factors (rot sigma 1e-3, trans sigma 1e-2).
-        for i in 1..self.keyposes.len() {
-            let delta = self.keyposes[i - 1].local.inverse() * self.keyposes[i].local;
-            graph.add_factor(
-                fac![BetweenResidual::new(to_se3(&delta)), (X((i - 1) as u32), X(i as u32)), (1e-3, 1e-2) as std],
-            );
-        }
-        // Loop factors: decoupled noise, trans var = ICP fitness (>= 0.01), rot 0.05.
-        let rot_var: f64 =
-            std::env::var("LOOP_ROT_VAR").ok().and_then(|v| v.parse().ok()).unwrap_or(0.05);
-        let trans_floor: f64 =
-            std::env::var("LOOP_TRANS_FLOOR").ok().and_then(|v| v.parse().ok()).unwrap_or(0.01);
-        for lp in &self.history {
-            let rot_sig = rot_var.sqrt();
-            let trans_sig = lp.score.max(trans_floor).sqrt();
-            graph.add_factor(fac![
-                BetweenResidual::new(to_se3(&lp.offset)),
-                (X(lp.target as u32), X(lp.source as u32)),
-                (rot_sig, trans_sig) as std
-            ]);
-        }
 
-        let mut opt: GaussNewton = GaussNewton::new_default(graph);
-        if let Ok(result) = opt.optimize(values) {
+        // Loop translation on the open outdoor scene tends to slide (point-to-
+        // plane along the ground plane); the loop-noise knobs (loop_rot_var,
+        // loop_trans_floor) let an open-scene config distrust loop translation
+        // while trusting rotation, whereas the structured-indoor default trusts
+        // both. `robust` (Geman-McClure) is available but off by default.
+        // Levenberg-Marquardt with permissive step acceptance: factrs's default
+        // min_model_fidelity (1e-3) rejects steps on the stiff/ill-conditioned
+        // graphs that tight loop noise produces, so it under-converges (worse than
+        // Gauss-Newton). Forcing acceptance (-1e4) + enough iterations makes LM
+        // converge well on both the easy indoor graphs and the stiff outdoor ones.
+        let mut params = LevenParams::default();
+        params.base.max_iterations = 200;
+        params.min_model_fidelity = -1e4;
+        let mut opt = LevenMarquardt::new(params, self.build_graph(self.cfg.loop_robust));
+        let result = opt.optimize(values);
+
+        if let Ok(result) = result {
             for i in 0..self.keyposes.len() {
                 if let Some(se) = result.get::<_, SE3>(X(i as u32)) {
                     self.keyposes[i].optimized = from_se3(se);

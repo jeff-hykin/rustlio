@@ -12,7 +12,7 @@ SimplePGO::SimplePGO(const Config &config) : m_config(config)
     m_t_offset.setZero();
 
     m_icp.setMaximumIterations(50);
-    m_icp.setMaxCorrespondenceDistance(10);
+    m_icp.setMaxCorrespondenceDistance(m_config.max_icp_correspondence_dist);
     m_icp.setTransformationEpsilon(1e-6);
     m_icp.setEuclideanFitnessEpsilon(1e-6);
     m_icp.setRANSACIterations(0);
@@ -144,7 +144,7 @@ void SimplePGO::searchForLoopPairs()
         return;
 
     CloudType::Ptr target_cloud = getSubMap(loop_idx, m_config.loop_submap_half_range, m_config.submap_resolution);
-    CloudType::Ptr source_cloud = getSubMap(m_key_poses.size() - 1, 0, m_config.submap_resolution);
+    CloudType::Ptr source_cloud = getSubMap(m_key_poses.size() - 1, m_config.loop_source_submap_half_range, m_config.submap_resolution);
     CloudType::Ptr align_cloud(new CloudType);
 
     m_icp.setInputSource(source_cloud);
@@ -164,6 +164,10 @@ void SimplePGO::searchForLoopPairs()
     V3D t_refined = loop_transform.block<3, 3>(0, 0).cast<double>() * m_key_poses[cur_idx].t_global + loop_transform.block<3, 1>(0, 3).cast<double>();
     one_pair.r_offset = m_key_poses[loop_idx].r_global.transpose() * r_refined;
     one_pair.t_offset = m_key_poses[loop_idx].r_global.transpose() * (t_refined - m_key_poses[loop_idx].t_global);
+    // Reject false alignments where ICP slid the source meters away despite a
+    // passing fitness score (common in self-similar scenes). Disabled when 0.
+    if (m_config.max_loop_offset > 0.0 && one_pair.t_offset.norm() > m_config.max_loop_offset)
+        return;
     m_cache_pairs.push_back(one_pair);
     m_history_pairs.emplace_back(one_pair.target_id, one_pair.source_id);
 }

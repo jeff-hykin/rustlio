@@ -6,8 +6,57 @@ mod pgo;
 
 use std::collections::HashMap;
 
+fn load_xyz(path: &str) -> Vec<nalgebra::Vector3<f64>> {
+    std::fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| {
+            let v: Vec<f64> = l.split_whitespace().map(|s| s.parse().unwrap()).collect();
+            nalgebra::Vector3::new(v[0], v[1], v[2])
+        })
+        .collect()
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+
+    // Diagnostic: build a submap from frames [idx-half, idx+half] of clouds.bin
+    // (transform each body cloud by its TUM pose, merge, voxel-downsample) and
+    // dump it + print the count. Mirrors the C++ for an apples-to-apples compare.
+    if args.len() >= 7 && args[1] == "--submap-test" {
+        let frames = io::load(&args[3], &args[2]); // poses, clouds
+        let idx: i64 = args[4].parse().unwrap();
+        let half: i64 = args[5].parse().unwrap();
+        let res: f64 = args[6].parse().unwrap();
+        let lo = (idx - half).max(0) as usize;
+        let hi = ((idx + half) as usize).min(frames.len() - 1);
+        let mut out = Vec::new();
+        for i in lo..=hi {
+            for p in &frames[i].cloud {
+                out.push(frames[i].pose * p);
+            }
+        }
+        let raw = out.len();
+        let ds = pgo::voxel_downsample_pub(&out, res);
+        let s: String = ds.iter().map(|p| format!("{} {} {}\n", p.x, p.y, p.z)).collect();
+        std::fs::write("/tmp/rust_submap.xyz", s).unwrap();
+        println!("rust_submap: frames[{lo}..{hi}] raw={raw} downsampled={}", ds.len());
+        return;
+    }
+
+    // Diagnostic: run this ICP on two dumped submaps, print the transform.
+    if args.len() >= 4 && args[1] == "--icp-test" {
+        let src = load_xyz(&args[2]);
+        let tgt = load_xyz(&args[3]);
+        let r = icp::point_to_plane(&src, &tgt, 50, 1.0, 10);
+        let t = r.transform.translation.vector;
+        println!(
+            "rust_icp: |t|={:.4} t=[{:.4},{:.4},{:.4}] fitness={:.5}",
+            t.norm(), t.x, t.y, t.z, r.fitness
+        );
+        return;
+    }
     let (mut clouds, mut poses, mut out) = (String::new(), String::new(), String::new());
     let mut kv: HashMap<String, String> = HashMap::new();
     let mut i = 1;
@@ -46,6 +95,11 @@ fn main() {
     cfg.max_icp_correspondence_dist = getd("max_icp_correspondence_dist", cfg.max_icp_correspondence_dist);
     cfg.max_loop_offset = getd("max_loop_offset", cfg.max_loop_offset);
     cfg.max_icp_iterations = geti("max_icp_iterations", cfg.max_icp_iterations as i32) as usize;
+    cfg.loop_rot_var = getd("loop_rot_var", cfg.loop_rot_var);
+    cfg.loop_trans_floor = getd("loop_trans_floor", cfg.loop_trans_floor);
+    cfg.loop_huber_k = getd("loop_huber_k", cfg.loop_huber_k);
+    cfg.loop_gm_c = getd("loop_gm_c", cfg.loop_gm_c);
+    cfg.loop_robust = geti("loop_robust", cfg.loop_robust as i32) != 0;
 
     let frames = io::load(&poses, &clouds);
     eprintln!("[pgo_bench_rs] loaded {} frames", frames.len());
@@ -72,6 +126,11 @@ fn main() {
             offset_t: l.offset.translation.vector.norm(),
         })
         .collect();
+    if std::env::var("ICP_LOG").is_ok() {
+        for l in &graph.history {
+            eprintln!("[rust loop] src={} tgt={} icp_t={:.3}", l.source, l.target, l.icp_t);
+        }
+    }
     eprintln!("[pgo_bench_rs] keyframes={} loops={}", kfs.len(), loops.len());
     io::write_json(&out, &kfs, &loops);
     eprintln!("[pgo_bench_rs] wrote {}", out);

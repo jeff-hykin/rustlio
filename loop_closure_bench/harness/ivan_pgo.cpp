@@ -167,6 +167,20 @@ void IvanPGO::searchForLoopPairs()
 
     CloudType::Ptr target = getSubMap(loop_idx, m_config.loop_submap_half_range, m_config.submap_resolution);
     CloudType::Ptr source = getSubMap(cur_idx, m_config.loop_source_submap_half_range, m_config.submap_resolution);
+    if (const char *pfx = std::getenv("DUMP_CPP")) {
+        static bool done = false;
+        if (!done) {
+            done = true;
+            auto w = [](const std::string &p, const CloudType::Ptr &c) {
+                std::ofstream f(p);
+                for (auto &pt : c->points) f << pt.x << " " << pt.y << " " << pt.z << "\n";
+            };
+            w(std::string(pfx) + "_src.xyz", source);
+            w(std::string(pfx) + "_tgt.xyz", target);
+            std::cerr << "[ivan] dumped src=" << source->size() << " tgt=" << target->size()
+                      << " (src_kf=" << cur_idx << " tgt_kf=" << loop_idx << ")\n";
+        }
+    }
     if (source->size() < static_cast<size_t>(std::max(10, 0)) || target->empty())
         return;
 
@@ -211,6 +225,10 @@ void IvanPGO::searchForLoopPairs()
     m_cache_pairs.push_back(pair);
     m_history_pairs.emplace_back(pair.target_id, pair.source_id);
     m_last_loop_time = cur_time;
+    if (std::getenv("ICP_LOG"))
+        std::cerr << "[ivan loop] src=" << cur_idx << " tgt=" << loop_idx
+                  << " fitness=" << fitness << " icp_t=" << dt.norm()
+                  << " offset_t=" << pair.t_offset.norm() << "\n";
 }
 
 void IvanPGO::smoothAndUpdate()

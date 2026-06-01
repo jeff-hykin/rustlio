@@ -71,10 +71,23 @@ pub fn point_to_plane(
     if source.len() < min_inliers || target.len() < min_inliers {
         return reject;
     }
+    // Dump every loop's submaps numbered (DUMP_ICP=prefix) so the C++ PCL ICP
+    // and this ICP can be compared on byte-identical input, per loop.
+    if let Ok(prefix) = std::env::var("DUMP_ICP") {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let i = N.fetch_add(1, Ordering::SeqCst);
+        let dump = |path: String, pts: &[Vector3<f64>]| {
+            let s: String = pts.iter().map(|p| format!("{} {} {}\n", p.x, p.y, p.z)).collect();
+            std::fs::write(path, s).unwrap();
+        };
+        dump(format!("{prefix}_{i}_src.xyz"), source);
+        dump(format!("{prefix}_{i}_tgt.xyz"), target);
+    }
+
     let entries: Vec<[f64; 3]> = target.iter().map(|p| [p.x, p.y, p.z]).collect();
     let tree: KdTree<f64, 3> = (&entries).into();
-    let kn: usize = std::env::var("NORMAL_K").ok().and_then(|v| v.parse().ok()).unwrap_or(12);
-    let normals = estimate_normals(target, &tree, kn);
+    let normals = estimate_normals(target, &tree, 12);
 
     let max_d2 = max_dist * max_dist;
     let w_p2p = p2p_weight();
@@ -98,7 +111,7 @@ pub fn point_to_plane(
             }
             let tgt = target[nn.item as usize];
             let n = normals[nn.item as usize];
-            let a = rot * p; // rotated point (q - trans)
+            let a = rot * p; // rotated point R*p (= q - trans)
             let r = n.dot(&(q - tgt)); // point-to-plane residual
             // J = [ (a x n)^T , n^T ]  (rotation first, then translation)
             let jrot = a.cross(&n);
@@ -130,9 +143,7 @@ pub fn point_to_plane(
         // the in-plane translation is unobservable (a null space of H); without
         // this the solve runs away by metres along that plane. lambda * I keeps
         // the unobserved directions pinned while barely touching observed ones.
-        let lfac: f64 =
-            std::env::var("LAMBDA_FAC").ok().and_then(|v| v.parse().ok()).unwrap_or(1e-2);
-        let lambda = lfac * (h.trace() / 6.0).max(1.0);
+        let lambda = 1e-2 * (h.trace() / 6.0).max(1.0);
         let dx = match (h + nalgebra::Matrix6::identity() * lambda).try_inverse() {
             Some(hinv) => -hinv * g,
             None => return reject,

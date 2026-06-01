@@ -8,6 +8,10 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 add_compile_options(-O3)
 
+# Bake the (nix store) dirs of linked libraries into the binary's rpath so it
+# finds libgtsam / libpcl without DYLD_LIBRARY_PATH wrangling at run time.
+set(CMAKE_BUILD_RPATH_USE_LINK_PATH ON)
+
 # GTSAM: under `nix develop` it is on CMAKE_PREFIX_PATH already. Otherwise fall
 # back to a locally-built install if one exists (legacy brew path). Override
 # with -DGTSAM_DIR=...
@@ -35,3 +39,8 @@ target_include_directories(pgo_bench PRIVATE
 
 target_link_libraries(pgo_bench PRIVATE gtsam ${PCL_LIBRARIES})
 target_compile_definitions(pgo_bench PRIVATE ${PCL_DEFINITIONS})
+
+# GTSAM's dylibs use @rpath install names; bake their directory (the nix store
+# path, or the local install) into the binary's rpath so it runs standalone.
+set_target_properties(pgo_bench PROPERTIES
+  BUILD_RPATH "$<TARGET_FILE_DIR:gtsam>")

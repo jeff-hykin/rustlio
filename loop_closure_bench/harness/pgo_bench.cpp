@@ -25,6 +25,66 @@
 #include "pgos/simple_pgo.h"
 #include "ivan_pgo.h"
 
+#include <pcl/features/normal_3d_omp.h>
+#include <pcl/registration/icp.h>
+
+// Diagnostic: load two xyz point files, run the SAME PCL point-to-plane ICP that
+// ivan_pgo uses, and print the resulting transform -- so it can be compared
+// against the Rust ICP on byte-identical input.
+static int icp_test(const std::string &src_path, const std::string &tgt_path) {
+    auto load = [](const std::string &p) {
+        CloudType::Ptr c(new CloudType);
+        std::ifstream f(p);
+        double x, y, z;
+        while (f >> x >> y >> z) {
+            PointType pt;
+            pt.x = x; pt.y = y; pt.z = z; pt.intensity = 0;
+            c->push_back(pt);
+        }
+        return c;
+    };
+    auto with_normals = [](const CloudType::Ptr &c, double radius) {
+        pcl::PointCloud<pcl::PointNormal>::Ptr out(new pcl::PointCloud<pcl::PointNormal>);
+        pcl::NormalEstimationOMP<PointType, pcl::Normal> ne;
+        pcl::search::KdTree<PointType>::Ptr tree(new pcl::search::KdTree<PointType>);
+        ne.setInputCloud(c);
+        ne.setSearchMethod(tree);
+        ne.setRadiusSearch(radius);
+        pcl::PointCloud<pcl::Normal> n;
+        ne.compute(n);
+        out->resize(c->size());
+        for (size_t i = 0; i < c->size(); ++i) {
+            out->points[i].x = c->points[i].x;
+            out->points[i].y = c->points[i].y;
+            out->points[i].z = c->points[i].z;
+            out->points[i].normal_x = n.points[i].normal_x;
+            out->points[i].normal_y = n.points[i].normal_y;
+            out->points[i].normal_z = n.points[i].normal_z;
+        }
+        out->width = out->size();
+        out->height = 1;
+        return out;
+    };
+    CloudType::Ptr src = load(src_path), tgt = load(tgt_path);
+    double radius = std::max(0.2 * 3.0, 0.3);
+    auto sn = with_normals(src, radius), tn = with_normals(tgt, radius);
+    pcl::IterativeClosestPointWithNormals<pcl::PointNormal, pcl::PointNormal> icp;
+    icp.setMaximumIterations(50);
+    icp.setMaxCorrespondenceDistance(1.0);
+    icp.setTransformationEpsilon(1e-6);
+    icp.setEuclideanFitnessEpsilon(1e-6);
+    icp.setInputSource(sn);
+    icp.setInputTarget(tn);
+    pcl::PointCloud<pcl::PointNormal> aligned;
+    icp.align(aligned);
+    M4F T = icp.getFinalTransformation();
+    V3D t = T.block<3, 1>(0, 3).cast<double>();
+    std::cout << "pcl_icp: converged=" << icp.hasConverged() << " |t|=" << t.norm()
+              << " t=[" << t.x() << "," << t.y() << "," << t.z() << "] fitness=" << icp.getFitnessScore()
+              << " (src=" << src->size() << " tgt=" << tgt->size() << ")\n";
+    return 0;
+}
+
 struct Frame {
     double ts;
     Eigen::Vector3d t;
@@ -130,6 +190,36 @@ static int run(const Config &cfg, const std::vector<Frame> &frames, const std::s
 }
 
 int main(int argc, char **argv) {
+    if (argc >= 4 && std::string(argv[1]) == "--icp-test") {
+        return icp_test(argv[2], argv[3]);
+    }
+    // Build a submap from frames [idx-half, idx+half] of clouds.bin the same way
+    // SimplePGO::getSubMap does (transform body by pose, merge, VoxelGrid), to
+    // compare point counts against the Rust pipeline.
+    if (argc >= 7 && std::string(argv[1]) == "--submap-test") {
+        std::vector<Frame> frames = load(argv[3], argv[2]); // poses, clouds
+        int idx = std::stoi(argv[4]), half = std::stoi(argv[5]);
+        double res = std::stod(argv[6]);
+        int lo = std::max(0, idx - half);
+        int hi = std::min((int)frames.size() - 1, idx + half);
+        CloudType::Ptr merged(new CloudType);
+        for (int i = lo; i <= hi; ++i) {
+            CloudType::Ptr g(new CloudType);
+            pcl::transformPointCloud(*frames[i].cloud, *g, frames[i].t, frames[i].q);
+            *merged += *g;
+        }
+        size_t raw = merged->size();
+        pcl::VoxelGrid<PointType> vg;
+        vg.setLeafSize(res, res, res);
+        vg.setInputCloud(merged);
+        CloudType::Ptr ds(new CloudType);
+        vg.filter(*ds);
+        std::ofstream f("/tmp/cpp_submap.xyz");
+        for (auto &p : ds->points) f << p.x << " " << p.y << " " << p.z << "\n";
+        std::cout << "cpp_submap: frames[" << lo << ".." << hi << "] raw=" << raw
+                  << " downsampled=" << ds->size() << "\n";
+        return 0;
+    }
     std::string clouds, poses, out;
     Config cfg;  // defaults from simple_pgo.h
     std::map<std::string, std::string> kv;

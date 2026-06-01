@@ -40,6 +40,16 @@ struct Config
     int loop_submap_half_range = 5;
     double submap_resolution = 0.1;
     double min_loop_detect_duration = 10.0;
+    // ICP correspondence gate. The default 10.0 m reproduces the original
+    // behavior, but is far too permissive in self-similar scenes: ICP slides
+    // a single-keyframe source cloud meters away into a wrong-but-overlapping
+    // alignment that still scores a low fitness. Tighten for a sane loop gate.
+    double max_icp_correspondence_dist = 10.0;
+    // Reject any accepted loop whose ICP translation offset exceeds this (m).
+    // 0 disables the check (original behavior). A real revisit needs only a
+    // small correction, so a large offset is almost always a false alignment.
+    double max_loop_offset = 0.0;
+    int loop_source_submap_half_range = 0;  // original used a single keyframe
 };
 
 class SimplePGO
@@ -60,6 +70,7 @@ public:
     CloudType::Ptr getSubMap(int idx, int half_range, double resolution);
     std::vector<std::pair<size_t, size_t>> &historyPairs() { return m_history_pairs; }
     std::vector<KeyPoseWithCloud> &keyPoses() { return m_key_poses; }
+    std::vector<LoopPair> &cachePairs() { return m_cache_pairs; }  // instrumentation: read before smoothAndUpdate
 
     M3D offsetR() { return m_r_offset; }
     V3D offsetT() { return m_t_offset; }

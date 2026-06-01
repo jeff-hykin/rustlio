@@ -22,6 +22,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BENCH="$ROOT/loop_closure_bench"
 HARNESS="$BENCH/harness/build/pgo_bench"
+RUST_HARNESS="$BENCH/rust/target/release/pgo_bench_rs"
 DATA="$ROOT/data/loop_bench"
 PY=(uv run --quiet --with numpy --with scipy python)
 
@@ -34,10 +35,16 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# 1. Build the harness via nix (GTSAM + PCL + Eigen all from one nixpkgs).
+# 1. Build the C++ harness via nix (GTSAM + PCL + Eigen all from one nixpkgs).
 if [[ $REBUILD -eq 1 || ! -x "$HARNESS" ]]; then
   echo ">> building C++ PGO benchmark harness (nix)..."
   bash "$BENCH/harness/build_harness.sh"
+fi
+
+# 1b. Build the Rust port (the `rust` config benchmarks Ivan's PGO in Rust).
+if [[ $REBUILD -eq 1 || ! -x "$RUST_HARNESS" ]]; then
+  echo ">> building Rust PGO harness (cargo)..."
+  ( cd "$BENCH/rust" && cargo build --release )
 fi
 
 # 2. Default to the datasets that are actually exported (have clouds + groundtruth).

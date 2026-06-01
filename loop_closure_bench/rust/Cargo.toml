@@ -1,0 +1,16 @@
+[package]
+name = "pgo_bench_rs"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "pgo_bench_rs"
+path = "src/main.rs"
+
+[dependencies]
+nalgebra = "0.34"
+kiddo = "5"
+factrs = "0.3.0"
+
+[profile.release]
+opt-level = 3

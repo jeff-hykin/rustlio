@@ -1,6 +1,6 @@
 [package]
 name = "fastlio_rs"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "Pure-Rust reimplementation of the FAST-LIO2 LiDAR-inertial odometry algorithm"
 license = "GPL-2.0"
@@ -16,6 +16,18 @@ path = "src/main.rs"
 [[bin]]
 name = "fastlio2-rerun"
 path = "src/bin/rerun_viewer.rs"
+
+[[bin]]
+name = "odom_rrd"
+path = "src/bin/odom_rrd.rs"
+
+[[bin]]
+name = "render"
+path = "src/bin/render.rs"
+
+[[bin]]
+name = "reloc_rust"
+path = "src/bin/reloc_rust.rs"
 
 [dependencies]
 nalgebra = "0.33"

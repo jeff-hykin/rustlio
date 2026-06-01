@@ -48,6 +48,11 @@ pub struct Config {
     pub t_il: V3D,
     pub lidar_cov_inv: f64,
     pub max_velocity: f64,
+    /// LiDAR-to-IMU time offset in seconds (upstream `common.time_offset_lidar_to_imu`).
+    pub time_offset_lidar_to_imu: f64,
+    /// LiDAR field of view in degrees (upstream `mapping.fov_degree`); points
+    /// outside half this angle from +x are culled. 360 disables culling.
+    pub fov_degree: f64,
 }
 
 impl Default for Config {
@@ -77,6 +82,8 @@ impl Default for Config {
             t_il: V3D::zeros(),
             lidar_cov_inv: 1000.0,
             max_velocity: 3.1,
+            time_offset_lidar_to_imu: 0.0,
+            fov_degree: 360.0,
         }
     }
 }
@@ -142,12 +149,15 @@ struct RawConfig {
     t_il: Option<Vec<f64>>,
     lidar_cov_inv: Option<f64>,
     max_velocity: Option<f64>,
+    time_offset_lidar_to_imu: Option<f64>,
+    fov_degree: Option<f64>,
 }
 
 #[derive(Deserialize, Default)]
 struct CommonSection {
     imu_topic: Option<String>,
     lid_topic: Option<String>,
+    time_offset_lidar_to_imu: Option<f64>,
 }
 
 #[derive(Deserialize, Default)]
@@ -164,6 +174,7 @@ struct MappingSection {
     b_acc_cov: Option<f64>,
     b_gyr_cov: Option<f64>,
     det_range: Option<f64>,
+    fov_degree: Option<f64>,
     cube_side_length: Option<f64>,
     filter_size_surf: Option<f64>,
     filter_size_map: Option<f64>,
@@ -205,6 +216,10 @@ impl RawConfig {
         if let Some(v) = self.t_il.or(map.extrinsic_t).as_deref().and_then(vec_to_v3d) { c.t_il = v; }
         if let Some(v) = self.lidar_cov_inv { c.lidar_cov_inv = v; }
         if let Some(v) = self.max_velocity { c.max_velocity = v; }
+        if let Some(v) = self.time_offset_lidar_to_imu.or(common.time_offset_lidar_to_imu) {
+            c.time_offset_lidar_to_imu = v;
+        }
+        if let Some(v) = self.fov_degree.or(map.fov_degree) { c.fov_degree = v; }
         c
     }
 }

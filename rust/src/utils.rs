@@ -14,6 +14,22 @@ pub fn livox_point_valid(tag: u8, line: u8) -> bool {
     line < 4 && ((tag & 0x30) == 0x10 || (tag & 0x30) == 0x00)
 }
 
+/// True if `(x,y,z)` is a near-duplicate of `prev` (identical within 1e-7 on
+/// every axis). Mirrors the dedup branch of upstream FAST_LIO `avia_handler`.
+///
+/// Upstream had an operator-precedence bug (dimos commit f3bbefa) where the
+/// blind-distance check only gated the z-axis difference. Here the blind check
+/// lives in `livox_to_point` (applied to the whole point), so dedup is a clean
+/// separate predicate — the corrected grouping `(dx||dy||dz) && blind`.
+pub fn livox_is_duplicate(prev: Option<(f32, f32, f32)>, x: f32, y: f32, z: f32) -> bool {
+    match prev {
+        Some((px, py, pz)) => {
+            (x - px).abs() <= 1e-7 && (y - py).abs() <= 1e-7 && (z - pz).abs() <= 1e-7
+        }
+        None => false,
+    }
+}
+
 pub fn livox_to_point(
     x: f32,
     y: f32,

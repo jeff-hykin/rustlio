@@ -70,14 +70,18 @@ impl IMUProcessor {
             kf.x.init_gravity_dir(&(-acc_mean));
         }
 
-        kf.p = nalgebra::SMatrix::<f64, 21, 21>::identity();
-        kf.p.fixed_view_mut::<3, 3>(6, 6)
+        // 24-dim error-state covariance (gravity is rows 21..24, estimated
+        // online). Matches upstream FAST_LIO IMU_init() block magnitudes.
+        kf.p = crate::ieskf::M24D::identity();
+        kf.p.fixed_view_mut::<3, 3>(6, 6) // r_il
             .copy_from(&(M3D::identity() * 0.00001));
-        kf.p.fixed_view_mut::<3, 3>(9, 9)
+        kf.p.fixed_view_mut::<3, 3>(9, 9) // t_il
             .copy_from(&(M3D::identity() * 0.00001));
-        kf.p.fixed_view_mut::<3, 3>(15, 15)
+        kf.p.fixed_view_mut::<3, 3>(15, 15) // gyro bias
             .copy_from(&(M3D::identity() * 0.0001));
-        kf.p.fixed_view_mut::<3, 3>(18, 18)
+        kf.p.fixed_view_mut::<3, 3>(18, 18) // accel bias (upstream seeds 1e-3)
+            .copy_from(&(M3D::identity() * 0.001));
+        kf.p.fixed_view_mut::<3, 3>(21, 21) // gravity (3-DOF additive)
             .copy_from(&(M3D::identity() * 0.0001));
 
         self.last_imu = self.imu_cache.last().cloned();

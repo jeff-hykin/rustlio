@@ -3086,7 +3086,7 @@ dependencies = [
 
 [[package]]
 name = "fastlio_rs"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "approx",
  "cxx",
@@ -3094,6 +3094,7 @@ dependencies = [
  "nalgebra",
  "ndarray",
  "ndarray-npy",
+ "rayon",
  "rerun",
  "serde",
  "serde_yaml",

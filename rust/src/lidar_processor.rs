@@ -69,6 +69,16 @@ impl LidarProcessor {
             self.cloud_down_lidar = package.cloud.clone();
         }
 
+        // FOV culling (upstream `fov_degree`): drop points outside a forward
+        // cone of half-angle fov_degree/2 from the LiDAR +x axis. 360 disables.
+        if self.config.fov_degree < 360.0 {
+            let cos_half = (0.5 * self.config.fov_degree.to_radians()).cos();
+            self.cloud_down_lidar.retain(|p| {
+                let r = ((p.x * p.x + p.y * p.y + p.z * p.z) as f64).sqrt();
+                r < 1e-6 || (p.x as f64) / r >= cos_half
+            });
+        }
+
         self.trim_cloud_map(kf);
         self.run_update(kf);
     }
@@ -76,25 +86,15 @@ impl LidarProcessor {
     fn run_update(&mut self, kf: &mut IESKF) {
         let cloud_down_lidar = self.cloud_down_lidar.clone();
         let config = self.config.clone();
-        let size = cloud_down_lidar.len();
-
-        let mut cloud_dw = vec![Point::default(); size];
-        let mut psf = vec![false; size];
-        let mut nv = vec![Point::default(); size];
-        let mut np: Vec<Vec<Point>> = vec![Vec::new(); size];
 
         {
-            let ikdtree = &mut self.ikdtree;
+            let ikdtree = &self.ikdtree;
             let mut loss_func = move |state: &State, share_data: &mut SharedState| {
                 Self::update_loss_func_inner(
                     state,
                     share_data,
                     &cloud_down_lidar,
                     &config,
-                    &mut cloud_dw,
-                    &mut psf,
-                    &mut nv,
-                    &mut np,
                     ikdtree,
                 );
             };
@@ -137,76 +137,46 @@ impl LidarProcessor {
         share_data: &mut SharedState,
         cloud_down_lidar: &[Point],
         config: &Config,
-        cloud_down_world: &mut Vec<Point>,
-        point_selected_flag: &mut Vec<bool>,
-        norm_vec: &mut Vec<Point>,
-        nearest_points: &mut Vec<Vec<Point>>,
-        ikdtree: &mut KdTree,
+        ikdtree: &KdTree,
     ) {
-        let size = cloud_down_lidar.len();
+        use rayon::prelude::*;
 
-        for i in 0..size {
-            let pb = &cloud_down_lidar[i];
-            let pbv = V3D::new(pb.x as f64, pb.y as f64, pb.z as f64);
-            let pwv = state.r_wi * (state.r_il * pbv + state.t_il) + state.t_wi;
+        // Phase 1 (parallel): per-point nearest-neighbor association + plane
+        // fit. ikd-tree search is read-only (`&self`), so points are processed
+        // concurrently. Each surviving point yields (lidar point, plane normal,
+        // signed distance). `esti_plane` packs the residual into `intensity`.
+        let contributions: Vec<(V3D, V3D, f64)> = cloud_down_lidar
+            .par_iter()
+            .filter_map(|pb| {
+                let pbv = V3D::new(pb.x as f64, pb.y as f64, pb.z as f64);
+                let pwv = state.r_wi * (state.r_il * pbv + state.t_il) + state.t_wi;
+                let pw = Point {
+                    x: pwv[0] as f32,
+                    y: pwv[1] as f32,
+                    z: pwv[2] as f32,
+                    intensity: pb.intensity,
+                    curvature: pb.curvature,
+                };
 
-            cloud_down_world[i] = Point {
-                x: pwv[0] as f32,
-                y: pwv[1] as f32,
-                z: pwv[2] as f32,
-                intensity: pb.intensity,
-                curvature: pb.curvature,
-            };
+                let (pts, dists) =
+                    ikdtree.nearest_search(&pw, config.near_search_num, f32::INFINITY);
+                if pts.len() < config.near_search_num
+                    || !dists.last().map_or(false, |d| *d <= 5.0)
+                {
+                    return None;
+                }
 
-            let (pts, dists) = ikdtree.nearest_search(
-                &cloud_down_world[i],
-                config.near_search_num,
-                f32::INFINITY,
-            );
-            nearest_points[i] = pts;
-
-            if nearest_points[i].len() >= config.near_search_num
-                && dists.last().map_or(false, |d| *d <= 5.0)
-            {
-                point_selected_flag[i] = true;
-            } else {
-                point_selected_flag[i] = false;
-            }
-
-            if !point_selected_flag[i] {
-                continue;
-            }
-
-            if let Some(pabcd) = esti_plane(&nearest_points[i], 0.1) {
+                let pabcd = esti_plane(&pts, 0.1)?;
                 let pd2 = pabcd[0] * pwv[0] + pabcd[1] * pwv[1] + pabcd[2] * pwv[2] + pabcd[3];
                 let s = 1.0 - 0.9 * pd2.abs() / pbv.norm().sqrt();
-                if s > 0.9 {
-                    point_selected_flag[i] = true;
-                    norm_vec[i] = Point {
-                        x: pabcd[0] as f32,
-                        y: pabcd[1] as f32,
-                        z: pabcd[2] as f32,
-                        intensity: pd2 as f32,
-                        curvature: 0.0,
-                    };
-                } else {
-                    point_selected_flag[i] = false;
+                if s <= 0.9 {
+                    return None;
                 }
-            } else {
-                point_selected_flag[i] = false;
-            }
-        }
+                Some((pbv, V3D::new(pabcd[0], pabcd[1], pabcd[2]), pd2))
+            })
+            .collect();
 
-        let mut effect_cloud_lidar = Vec::new();
-        let mut effect_norm_vec = Vec::new();
-        for i in 0..size {
-            if point_selected_flag[i] {
-                effect_cloud_lidar.push(cloud_down_lidar[i]);
-                effect_norm_vec.push(norm_vec[i]);
-            }
-        }
-
-        if effect_cloud_lidar.is_empty() {
+        if contributions.is_empty() {
             share_data.valid = false;
             use std::sync::atomic::{AtomicBool, Ordering};
             static WARNED: AtomicBool = AtomicBool::new(false);
@@ -215,38 +185,34 @@ impl LidarProcessor {
             }
             return;
         }
+
+        // Phase 2 (serial): accumulate the measurement information matrix.
         share_data.valid = true;
         share_data.h = crate::ieskf::M12D::zeros();
         share_data.b = crate::ieskf::V12D::zeros();
 
-        for i in 0..effect_cloud_lidar.len() {
+        for (lpv, nv, pd2) in &contributions {
             let mut j_row = SMatrix::<f64, 1, 12>::zeros();
-            let lp = &effect_cloud_lidar[i];
-            let np = &effect_norm_vec[i];
-            let lpv = V3D::new(lp.x as f64, lp.y as f64, lp.z as f64);
-            let nv = V3D::new(np.x as f64, np.y as f64, np.z as f64);
 
             let b_val = -nv.transpose()
                 * state.r_wi
-                * so3::hat(&(state.r_il * lpv + state.t_wi));
+                * so3::hat(&(state.r_il * lpv + state.t_il));
             j_row.fixed_view_mut::<1, 3>(0, 0).copy_from(&b_val);
             j_row
                 .fixed_view_mut::<1, 3>(0, 3)
                 .copy_from(&nv.transpose());
 
             if config.esti_il {
-                let c_val =
-                    -nv.transpose() * state.r_wi * state.r_il * so3::hat(&lpv);
+                let c_val = -nv.transpose() * state.r_wi * state.r_il * so3::hat(lpv);
                 let d_val = nv.transpose() * state.r_wi;
                 j_row.fixed_view_mut::<1, 3>(0, 6).copy_from(&c_val);
                 j_row.fixed_view_mut::<1, 3>(0, 9).copy_from(&d_val);
             }
 
             share_data.h += j_row.transpose() * config.lidar_cov_inv * j_row;
-            share_data.b +=
-                (j_row.transpose() * config.lidar_cov_inv * np.intensity as f64)
-                    .fixed_rows::<12>(0)
-                    .into_owned();
+            share_data.b += (j_row.transpose() * config.lidar_cov_inv * *pd2)
+                .fixed_rows::<12>(0)
+                .into_owned();
         }
     }
 

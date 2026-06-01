@@ -3,10 +3,18 @@ use crate::so3;
 use crate::commons::{M3D, V3D};
 
 pub type M12D = SMatrix<f64, 12, 12>;
-pub type M21D = SMatrix<f64, 21, 21>;
 pub type V12D = SVector<f64, 12>;
-pub type V21D = SVector<f64, 21>;
-pub type M21X12D = SMatrix<f64, 21, 12>;
+/// Error-state dimension: rot, pos, R_il, t_il, v, bg, ba, gravity = 8 * 3 = 24.
+/// Gravity (rows 21..24) is estimated online as a 3-DOF additive perturbation.
+pub type M24D = SMatrix<f64, 24, 24>;
+pub type V24D = SVector<f64, 24>;
+pub type M24X12D = SMatrix<f64, 24, 12>;
+
+// Back-compat aliases (the error-state grew from 21 to 24 dims when online
+// gravity estimation was added).
+pub type M21D = M24D;
+pub type V21D = V24D;
+pub type M21X12D = M24X12D;
 
 pub struct SharedState {
     pub h: M12D,
@@ -70,6 +78,7 @@ impl State {
         self.v += delta.fixed_rows::<3>(12).into_owned();
         self.bg += delta.fixed_rows::<3>(15).into_owned();
         self.ba += delta.fixed_rows::<3>(18).into_owned();
+        self.g += delta.fixed_rows::<3>(21).into_owned();
     }
 
     pub fn minus(&self, other: &State) -> V21D {
@@ -95,6 +104,9 @@ impl State {
         delta
             .fixed_rows_mut::<3>(18)
             .copy_from(&(self.ba - other.ba));
+        delta
+            .fixed_rows_mut::<3>(21)
+            .copy_from(&(self.g - other.g));
         delta
     }
 }
@@ -168,6 +180,10 @@ impl IESKF {
         self.f_mat
             .fixed_view_mut::<3, 3>(12, 18)
             .copy_from(&(-self.x.r_wi * dt));
+        // velocity depends on gravity: d(delta_v)/d(delta_g) = I * dt
+        self.f_mat
+            .fixed_view_mut::<3, 3>(12, 21)
+            .copy_from(&(Matrix3::identity() * dt));
 
         self.g_mat = M21X12D::zeros();
         self.g_mat

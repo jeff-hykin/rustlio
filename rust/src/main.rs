@@ -128,7 +128,7 @@ fn parse_livox_custom_msg(data: &[u8], config: &Config) -> Option<LidarCloud> {
     // Header: stamp
     let sec = u32::from_le_bytes(buf[0..4].try_into().ok()?);
     let nsec = u32::from_le_bytes(buf[4..8].try_into().ok()?);
-    let header_time = utils::stamp_to_sec(sec, nsec);
+    let header_time = utils::stamp_to_sec(sec, nsec) + config.time_offset_lidar_to_imu;
 
     // Skip frame_id string
     let fid_len = u32::from_le_bytes(buf[8..12].try_into().ok()?) as usize;
@@ -161,6 +161,7 @@ fn parse_livox_custom_msg(data: &[u8], config: &Config) -> Option<LidarCloud> {
 
     let mut cloud = Vec::new();
     let mut max_offset_time: f32 = 0.0;
+    let mut prev_xyz: Option<(f32, f32, f32)> = None;
 
     let mut i = 0;
     while i < seq_len.min(point_num) {
@@ -176,7 +177,9 @@ fn parse_livox_custom_msg(data: &[u8], config: &Config) -> Option<LidarCloud> {
         let tag = buf[po + 17];
         let line = buf[po + 18];
 
-        if utils::livox_point_valid(tag, line) {
+        if utils::livox_point_valid(tag, line)
+            && !utils::livox_is_duplicate(prev_xyz, x, y, z)
+        {
             if let Some(p) = utils::livox_to_point(
                 x, y, z, reflectivity, offset_time,
                 config.lidar_min_range, config.lidar_max_range,
@@ -185,6 +188,7 @@ fn parse_livox_custom_msg(data: &[u8], config: &Config) -> Option<LidarCloud> {
                     max_offset_time = p.curvature;
                 }
                 cloud.push(p);
+                prev_xyz = Some((x, y, z));
             }
         }
         i += filter_num;

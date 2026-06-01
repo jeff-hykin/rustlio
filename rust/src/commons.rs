@@ -43,9 +43,9 @@ pub struct Config {
     pub near_search_num: usize,
     pub ieskf_max_iter: usize,
     pub gravity_align: bool,
-    pub esti_il: bool,
-    pub r_il: M3D,
-    pub t_il: V3D,
+    pub estimate_extrinsic: bool,
+    pub lidar_to_imu_rot: M3D,
+    pub lidar_to_imu_trans: V3D,
     pub lidar_cov_inv: f64,
     pub max_velocity: f64,
     /// LiDAR-to-IMU time offset in seconds (upstream `common.time_offset_lidar_to_imu`).
@@ -77,9 +77,9 @@ impl Default for Config {
             near_search_num: 5,
             ieskf_max_iter: 5,
             gravity_align: true,
-            esti_il: false,
-            r_il: M3D::identity(),
-            t_il: V3D::zeros(),
+            estimate_extrinsic: false,
+            lidar_to_imu_rot: M3D::identity(),
+            lidar_to_imu_trans: V3D::zeros(),
             lidar_cov_inv: 1000.0,
             max_velocity: 3.1,
             time_offset_lidar_to_imu: 0.0,
@@ -211,9 +211,9 @@ impl RawConfig {
         if let Some(v) = self.near_search_num { c.near_search_num = v; }
         if let Some(v) = self.ieskf_max_iter { c.ieskf_max_iter = v; }
         if let Some(v) = self.gravity_align { c.gravity_align = v; }
-        if let Some(v) = self.esti_il.or(map.extrinsic_est_en) { c.esti_il = v; }
-        if let Some(v) = self.r_il.or(map.extrinsic_r).as_deref().and_then(vec_to_m3d) { c.r_il = v; }
-        if let Some(v) = self.t_il.or(map.extrinsic_t).as_deref().and_then(vec_to_v3d) { c.t_il = v; }
+        if let Some(v) = self.esti_il.or(map.extrinsic_est_en) { c.estimate_extrinsic = v; }
+        if let Some(v) = self.r_il.or(map.extrinsic_r).as_deref().and_then(vec_to_m3d) { c.lidar_to_imu_rot = v; }
+        if let Some(v) = self.t_il.or(map.extrinsic_t).as_deref().and_then(vec_to_v3d) { c.lidar_to_imu_trans = v; }
         if let Some(v) = self.lidar_cov_inv { c.lidar_cov_inv = v; }
         if let Some(v) = self.max_velocity { c.max_velocity = v; }
         if let Some(v) = self.time_offset_lidar_to_imu.or(common.time_offset_lidar_to_imu) {

@@ -165,7 +165,7 @@ fn read_mcap_bag(path: &str, config: &Config) -> Vec<(f64, McapMessage)> {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().collect();
     let config_path = args.get(1).map(|s| s.as_str())
-        .unwrap_or("../fastlio2/config/lio.yaml");
+        .unwrap_or("../config_examples/mid360.yaml");
     let bag_path = args.get(2).map(|s| s.as_str())
         .unwrap_or("../data/ruwik2_pt3_bag_custom/ruwik2_pt3_bag_custom_0.mcap");
     let output_path = args.get(3).map(|s| s.as_str());
@@ -238,11 +238,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 if builder.status() == BuilderStatus::Mapping {
                     let state = &builder.kf.x;
-                    let pos = [state.t_wi[0] as f32, state.t_wi[1] as f32, state.t_wi[2] as f32];
+                    let pos = [state.imu_to_world_trans[0] as f32, state.imu_to_world_trans[1] as f32, state.imu_to_world_trans[2] as f32];
                     let speed = state.v.norm();
 
                     // Robot position
-                    let rot = &state.r_wi;
+                    let rot = &state.imu_to_world_rot;
                     let q = rotation_matrix_to_quaternion(rot);
                     rec.log(
                         "world/robot",

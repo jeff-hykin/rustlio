@@ -206,7 +206,7 @@ fn main() {
     let config_path = args
         .get(1)
         .map(|s| s.as_str())
-        .unwrap_or("../fastlio2/config/lio.yaml");
+        .unwrap_or("../config_examples/mid360.yaml");
     let bag_path = args.get(2).map(|s| s.as_str()).unwrap_or(
         "../data/ruwik2_pt3_bag_custom/ruwik2_pt3_bag_custom_0.mcap",
     );
@@ -268,7 +268,7 @@ fn main() {
 
                     odom_records.push([
                         lidar.start_time,
-                        state.t_wi[0], state.t_wi[1], state.t_wi[2],
+                        state.imu_to_world_trans[0], state.imu_to_world_trans[1], state.imu_to_world_trans[2],
                         state.v[0], state.v[1], state.v[2],
                     ]);
 

@@ -54,8 +54,8 @@ impl IMUProcessor {
         acc_mean /= n;
         gyro_mean /= n;
 
-        kf.x.r_il = self.config.r_il;
-        kf.x.t_il = self.config.t_il;
+        kf.x.lidar_to_imu_rot = self.config.lidar_to_imu_rot;
+        kf.x.lidar_to_imu_trans = self.config.lidar_to_imu_trans;
         kf.x.bg = gyro_mean;
 
         if self.config.gravity_align {
@@ -64,7 +64,7 @@ impl IMUProcessor {
             let to = V3D::new(0.0, 0.0, -1.0);
             let q = UnitQuaternion::rotation_between(&from, &to)
                 .unwrap_or(UnitQuaternion::identity());
-            kf.x.r_wi = *q.to_rotation_matrix().matrix();
+            kf.x.imu_to_world_rot = *q.to_rotation_matrix().matrix();
             kf.x.init_gravity_dir(&V3D::new(0.0, 0.0, -1.0));
         } else {
             kf.x.init_gravity_dir(&(-acc_mean));
@@ -73,9 +73,9 @@ impl IMUProcessor {
         // 24-dim error-state covariance (gravity is rows 21..24, estimated
         // online). Matches upstream FAST_LIO IMU_init() block magnitudes.
         kf.p = crate::ieskf::M24D::identity();
-        kf.p.fixed_view_mut::<3, 3>(6, 6) // r_il
+        kf.p.fixed_view_mut::<3, 3>(6, 6) // lidar_to_imu_rot
             .copy_from(&(M3D::identity() * 0.00001));
-        kf.p.fixed_view_mut::<3, 3>(9, 9) // t_il
+        kf.p.fixed_view_mut::<3, 3>(9, 9) // lidar_to_imu_trans
             .copy_from(&(M3D::identity() * 0.00001));
         kf.p.fixed_view_mut::<3, 3>(15, 15) // gyro bias
             .copy_from(&(M3D::identity() * 0.0001));
@@ -106,8 +106,8 @@ impl IMUProcessor {
             acc: self.last_acc,
             gyro: self.last_gyro,
             vel: kf.x.v,
-            trans: kf.x.t_wi,
-            rot: kf.x.r_wi,
+            trans: kf.x.imu_to_world_trans,
+            rot: kf.x.imu_to_world_rot,
         });
 
         let mut inp = Input::default();
@@ -138,7 +138,7 @@ impl IMUProcessor {
             kf.predict(&inp, dt, &self.q);
 
             self.last_gyro = gyro_val - kf.x.bg;
-            self.last_acc = kf.x.r_wi * (acc_val - kf.x.ba) + kf.x.g;
+            self.last_acc = kf.x.imu_to_world_rot * (acc_val - kf.x.ba) + kf.x.g;
 
             let offset = tail.time - cloud_time_begin;
             self.poses_cache.push(Pose {
@@ -146,8 +146,8 @@ impl IMUProcessor {
                 acc: self.last_acc,
                 gyro: self.last_gyro,
                 vel: kf.x.v,
-                trans: kf.x.t_wi,
-                rot: kf.x.r_wi,
+                trans: kf.x.imu_to_world_trans,
+                rot: kf.x.imu_to_world_rot,
             });
         }
 
@@ -156,10 +156,10 @@ impl IMUProcessor {
         self.last_imu = self.imu_cache.last().cloned();
         self.last_propagate_end_time = propagate_time_end;
 
-        let cur_r_wi = kf.x.r_wi;
-        let cur_t_wi = kf.x.t_wi;
-        let cur_r_il = kf.x.r_il;
-        let cur_t_il = kf.x.t_il;
+        let cur_r_wi = kf.x.imu_to_world_rot;
+        let cur_t_wi = kf.x.imu_to_world_trans;
+        let cur_r_il = kf.x.lidar_to_imu_rot;
+        let cur_t_il = kf.x.lidar_to_imu_trans;
 
         let n_points = package.cloud.len();
         if n_points == 0 || self.poses_cache.len() < 2 {

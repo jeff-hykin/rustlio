@@ -104,7 +104,7 @@ mod tests {
         let second_mapper = MapBuilder::new(config);
 
         // A sane frame is accepted and remembered as the last good state.
-        mapper.kf.x.t_wi = V3D::new(1.0, 0.0, 0.0);
+        mapper.kf.x.imu_to_world_trans = V3D::new(1.0, 0.0, 0.0);
         mapper.kf.x.v = V3D::new(1.0, 0.0, 0.0);
         let pre_update_state = mapper.kf.x.clone();
         assert!(!mapper.reject_if_over_speed(pre_update_state));
@@ -113,11 +113,11 @@ mod tests {
         // An over-speed frame is rejected: velocity zeroed, pose rolled back to
         // the last good one, not the teleported pre-update value.
         let pre_update_state = mapper.kf.x.clone();
-        mapper.kf.x.t_wi = V3D::new(99.0, 0.0, 0.0);
+        mapper.kf.x.imu_to_world_trans = V3D::new(99.0, 0.0, 0.0);
         mapper.kf.x.v = V3D::new(50.0, 0.0, 0.0);
         assert!(mapper.reject_if_over_speed(pre_update_state));
         assert_eq!(mapper.kf.x.v, V3D::zeros());
-        assert_eq!(mapper.kf.x.t_wi, V3D::new(1.0, 0.0, 0.0));
+        assert_eq!(mapper.kf.x.imu_to_world_trans, V3D::new(1.0, 0.0, 0.0));
 
         // The second mapper shares no state with the first.
         assert!(second_mapper.last_good_state.is_none());

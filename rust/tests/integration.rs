@@ -116,7 +116,7 @@ fn stationary_sensor_reaches_mapping_and_stays_put() {
     let max_speed = speeds.iter().cloned().fold(0.0_f64, f64::max);
     assert!(max_speed < 0.5, "stationary sensor drifted: max speed {max_speed} m/s");
 
-    let distance_from_origin = builder.kf.x.t_wi.norm();
+    let distance_from_origin = builder.kf.x.imu_to_world_trans.norm();
     assert!(distance_from_origin < 0.5, "stationary sensor wandered {distance_from_origin} m");
 }
 
@@ -213,7 +213,7 @@ fn mapper_recovers_after_velocity_spike() {
     // the filter should be back near the origin moving slowly, not stuck on a
     // corrupted state.
     let recovered_speed = builder.kf.x.v.norm();
-    let recovered_distance = builder.kf.x.t_wi.norm();
+    let recovered_distance = builder.kf.x.imu_to_world_trans.norm();
     assert!(recovered_speed < 1.0, "velocity did not recover: {recovered_speed} m/s");
     assert!(recovered_distance < 5.0, "position did not recover: {recovered_distance} m");
 }

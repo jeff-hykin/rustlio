@@ -4,7 +4,7 @@ use crate::commons::{M3D, V3D};
 
 pub type M12D = SMatrix<f64, 12, 12>;
 pub type V12D = SVector<f64, 12>;
-/// Error-state dimension: rot, pos, R_il, t_il, v, bg, ba, gravity = 8 * 3 = 24.
+/// Error-state dimension: rot, pos, lidar_to_imu_rot, lidar_to_imu_trans, v, bg, ba, gravity = 8 * 3 = 24.
 /// Gravity (rows 21..24) is estimated online as a 3-DOF additive perturbation.
 pub type M24D = SMatrix<f64, 24, 24>;
 pub type V24D = SVector<f64, 24>;
@@ -53,10 +53,10 @@ impl Default for Input {
 
 #[derive(Clone, Debug)]
 pub struct State {
-    pub r_wi: M3D,
-    pub t_wi: V3D,
-    pub r_il: M3D,
-    pub t_il: V3D,
+    pub imu_to_world_rot: M3D,
+    pub imu_to_world_trans: V3D,
+    pub lidar_to_imu_rot: M3D,
+    pub lidar_to_imu_trans: V3D,
     pub v: V3D,
     pub bg: V3D,
     pub ba: V3D,
@@ -71,10 +71,10 @@ impl State {
     }
 
     pub fn add_delta(&mut self, delta: &V21D) {
-        self.r_wi *= so3::exp(&delta.fixed_rows::<3>(0).into_owned());
-        self.t_wi += delta.fixed_rows::<3>(3).into_owned();
-        self.r_il *= so3::exp(&delta.fixed_rows::<3>(6).into_owned());
-        self.t_il += delta.fixed_rows::<3>(9).into_owned();
+        self.imu_to_world_rot *= so3::exp(&delta.fixed_rows::<3>(0).into_owned());
+        self.imu_to_world_trans += delta.fixed_rows::<3>(3).into_owned();
+        self.lidar_to_imu_rot *= so3::exp(&delta.fixed_rows::<3>(6).into_owned());
+        self.lidar_to_imu_trans += delta.fixed_rows::<3>(9).into_owned();
         self.v += delta.fixed_rows::<3>(12).into_owned();
         self.bg += delta.fixed_rows::<3>(15).into_owned();
         self.ba += delta.fixed_rows::<3>(18).into_owned();
@@ -84,17 +84,17 @@ impl State {
     pub fn minus(&self, other: &State) -> V21D {
         let mut delta = V21D::zeros();
         delta.fixed_rows_mut::<3>(0).copy_from(
-            &so3::log(&(other.r_wi.transpose() * self.r_wi)),
+            &so3::log(&(other.imu_to_world_rot.transpose() * self.imu_to_world_rot)),
         );
         delta
             .fixed_rows_mut::<3>(3)
-            .copy_from(&(self.t_wi - other.t_wi));
+            .copy_from(&(self.imu_to_world_trans - other.imu_to_world_trans));
         delta.fixed_rows_mut::<3>(6).copy_from(
-            &so3::log(&(other.r_il.transpose() * self.r_il)),
+            &so3::log(&(other.lidar_to_imu_rot.transpose() * self.lidar_to_imu_rot)),
         );
         delta
             .fixed_rows_mut::<3>(9)
-            .copy_from(&(self.t_il - other.t_il));
+            .copy_from(&(self.lidar_to_imu_trans - other.lidar_to_imu_trans));
         delta
             .fixed_rows_mut::<3>(12)
             .copy_from(&(self.v - other.v));
@@ -114,10 +114,10 @@ impl State {
 impl Default for State {
     fn default() -> Self {
         State {
-            r_wi: M3D::identity(),
-            t_wi: V3D::zeros(),
-            r_il: M3D::identity(),
-            t_il: V3D::zeros(),
+            imu_to_world_rot: M3D::identity(),
+            imu_to_world_trans: V3D::zeros(),
+            lidar_to_imu_rot: M3D::identity(),
+            lidar_to_imu_trans: V3D::zeros(),
             v: V3D::zeros(),
             bg: V3D::zeros(),
             ba: V3D::zeros(),
@@ -160,7 +160,7 @@ impl IESKF {
         delta.fixed_rows_mut::<3>(3).copy_from(&(self.x.v * dt));
         delta
             .fixed_rows_mut::<3>(12)
-            .copy_from(&((self.x.r_wi * acc_corrected + self.x.g) * dt));
+            .copy_from(&((self.x.imu_to_world_rot * acc_corrected + self.x.g) * dt));
 
         self.f_mat = M21D::identity();
         let neg_gyro_dt = -(gyro_corrected * dt);
@@ -176,10 +176,10 @@ impl IESKF {
             .copy_from(&(Matrix3::identity() * dt));
         self.f_mat
             .fixed_view_mut::<3, 3>(12, 0)
-            .copy_from(&(-self.x.r_wi * so3::hat(&acc_corrected) * dt));
+            .copy_from(&(-self.x.imu_to_world_rot * so3::hat(&acc_corrected) * dt));
         self.f_mat
             .fixed_view_mut::<3, 3>(12, 18)
-            .copy_from(&(-self.x.r_wi * dt));
+            .copy_from(&(-self.x.imu_to_world_rot * dt));
         // velocity depends on gravity: d(delta_v)/d(delta_g) = I * dt
         self.f_mat
             .fixed_view_mut::<3, 3>(12, 21)
@@ -191,7 +191,7 @@ impl IESKF {
             .copy_from(&(-jr_val * dt));
         self.g_mat
             .fixed_view_mut::<3, 3>(12, 3)
-            .copy_from(&(-self.x.r_wi * dt));
+            .copy_from(&(-self.x.imu_to_world_rot * dt));
         self.g_mat
             .fixed_view_mut::<3, 3>(15, 6)
             .copy_from(&(Matrix3::identity() * dt));
@@ -284,10 +284,10 @@ mod tests {
             acc: V3D::new(1.0, 0.0, 9.81),
             gyro: V3D::zeros(),
         };
-        let pos_before = kf.x.t_wi;
+        let pos_before = kf.x.imu_to_world_trans;
         kf.predict(&inp, 0.01, &q);
         assert_ne!(kf.x.v, V3D::zeros());
         kf.predict(&inp, 0.01, &q);
-        assert_ne!(kf.x.t_wi, pos_before);
+        assert_ne!(kf.x.imu_to_world_trans, pos_before);
     }
 }

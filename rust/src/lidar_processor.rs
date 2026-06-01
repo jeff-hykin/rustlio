@@ -50,11 +50,11 @@ impl LidarProcessor {
     }
 
     pub fn r_wl(&self, kf: &IESKF) -> M3D {
-        kf.x.r_wi * kf.x.r_il
+        kf.x.imu_to_world_rot * kf.x.lidar_to_imu_rot
     }
 
     pub fn t_wl(&self, kf: &IESKF) -> V3D {
-        kf.x.t_wi + kf.x.r_wi * kf.x.t_il
+        kf.x.imu_to_world_trans + kf.x.imu_to_world_rot * kf.x.lidar_to_imu_trans
     }
 
     pub fn init_cloud_map(&mut self, points: &[Point]) {
@@ -115,7 +115,7 @@ impl LidarProcessor {
         for i in 0..self.cloud_down_lidar.len() {
             let p = &self.cloud_down_lidar[i];
             let pv = V3D::new(p.x as f64, p.y as f64, p.z as f64);
-            let pw = state.r_wi * (state.r_il * pv + state.t_il) + state.t_wi;
+            let pw = state.imu_to_world_rot * (state.lidar_to_imu_rot * pv + state.lidar_to_imu_trans) + state.imu_to_world_trans;
             self.cloud_down_world[i] = Point {
                 x: pw[0] as f32,
                 y: pw[1] as f32,
@@ -149,7 +149,7 @@ impl LidarProcessor {
             .par_iter()
             .filter_map(|pb| {
                 let pbv = V3D::new(pb.x as f64, pb.y as f64, pb.z as f64);
-                let pwv = state.r_wi * (state.r_il * pbv + state.t_il) + state.t_wi;
+                let pwv = state.imu_to_world_rot * (state.lidar_to_imu_rot * pbv + state.lidar_to_imu_trans) + state.imu_to_world_trans;
                 let pw = Point {
                     x: pwv[0] as f32,
                     y: pwv[1] as f32,
@@ -195,16 +195,16 @@ impl LidarProcessor {
             let mut j_row = SMatrix::<f64, 1, 12>::zeros();
 
             let b_val = -nv.transpose()
-                * state.r_wi
-                * so3::hat(&(state.r_il * lpv + state.t_il));
+                * state.imu_to_world_rot
+                * so3::hat(&(state.lidar_to_imu_rot * lpv + state.lidar_to_imu_trans));
             j_row.fixed_view_mut::<1, 3>(0, 0).copy_from(&b_val);
             j_row
                 .fixed_view_mut::<1, 3>(0, 3)
                 .copy_from(&nv.transpose());
 
-            if config.esti_il {
-                let c_val = -nv.transpose() * state.r_wi * state.r_il * so3::hat(lpv);
-                let d_val = nv.transpose() * state.r_wi;
+            if config.estimate_extrinsic {
+                let c_val = -nv.transpose() * state.imu_to_world_rot * state.lidar_to_imu_rot * so3::hat(lpv);
+                let d_val = nv.transpose() * state.imu_to_world_rot;
                 j_row.fixed_view_mut::<1, 3>(0, 6).copy_from(&c_val);
                 j_row.fixed_view_mut::<1, 3>(0, 9).copy_from(&d_val);
             }
@@ -219,7 +219,7 @@ impl LidarProcessor {
     pub fn trim_cloud_map(&mut self, kf: &IESKF) {
         self.local_map.cub_to_rm.clear();
         let state = &kf.x;
-        let pos_lidar = state.t_wi + state.r_wi * state.t_il;
+        let pos_lidar = state.imu_to_world_trans + state.imu_to_world_rot * state.lidar_to_imu_trans;
 
         if !self.local_map.initialized {
             for i in 0..3 {
@@ -292,7 +292,7 @@ impl LidarProcessor {
         for i in 0..size {
             let p = &self.cloud_down_lidar[i];
             let pv = V3D::new(p.x as f64, p.y as f64, p.z as f64);
-            let pw = state.r_wi * (state.r_il * pv + state.t_il) + state.t_wi;
+            let pw = state.imu_to_world_rot * (state.lidar_to_imu_rot * pv + state.lidar_to_imu_trans) + state.imu_to_world_trans;
             let pw_point = Point {
                 x: pw[0] as f32,
                 y: pw[1] as f32,

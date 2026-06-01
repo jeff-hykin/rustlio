@@ -250,9 +250,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         let st = &builder.kf.x;
-        let r_wl = st.r_wi * st.r_il;
-        let t_wl = st.t_wi + st.r_wi * st.t_il;
-        let pos = [st.t_wi[0] as f32, st.t_wi[1] as f32, st.t_wi[2] as f32];
+        let r_wl = st.imu_to_world_rot * st.lidar_to_imu_rot;
+        let t_wl = st.imu_to_world_trans + st.imu_to_world_rot * st.lidar_to_imu_trans;
+        let pos = [st.imu_to_world_trans[0] as f32, st.imu_to_world_trans[1] as f32, st.imu_to_world_trans[2] as f32];
 
         if first_frame_time.is_none() {
             first_frame_time = Some(fs);

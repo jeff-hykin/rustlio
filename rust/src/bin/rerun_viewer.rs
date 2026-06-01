@@ -1,7 +1,7 @@
 use std::path::Path;
-use fastlio2::commons::*;
-use fastlio2::map_builder::{BuilderStatus, MapBuilder};
-use fastlio2::utils;
+use fastlio_rs::commons::*;
+use fastlio_rs::map_builder::{BuilderStatus, MapBuilder};
+use fastlio_rs::utils;
 
 fn load_config(path: &str) -> Config {
     if Path::new(path).exists() {

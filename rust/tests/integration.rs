@@ -5,8 +5,8 @@
 //! stay put, sensor dropouts must not crash the filter, and the velocity-cap
 //! guardrail must keep odometry bounded even when the IMU glitches.
 
-use fastlio2::commons::*;
-use fastlio2::map_builder::{BuilderStatus, MapBuilder};
+use fastlio_rs::commons::*;
+use fastlio_rs::map_builder::{BuilderStatus, MapBuilder};
 
 const IMU_PERIOD_SECONDS: f64 = 0.01; // 100 Hz IMU
 const IMUS_PER_FRAME: usize = 10; // -> 10 Hz LiDAR frames

@@ -1,7 +1,13 @@
 [package]
-name = "fastlio2"
+name = "fastlio_rs"
 version = "0.1.0"
 edition = "2021"
+description = "Pure-Rust reimplementation of the FAST-LIO2 LiDAR-inertial odometry algorithm"
+license = "GPL-2.0"
+repository = "https://github.com/jeff-hykin/fastlio_rs"
+readme = "README.md"
+keywords = ["lidar", "slam", "odometry", "robotics", "fast-lio"]
+categories = ["science::robotics"]
 
 [[bin]]
 name = "fastlio2"

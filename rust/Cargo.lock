@@ -3085,7 +3085,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "fastlio2"
+name = "fastlio_rs"
 version = "0.1.0"
 dependencies = [
  "approx",

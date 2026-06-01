@@ -1,4 +1,4 @@
-# fastlio2 — Rust
+# fastlio_rs — Rust FAST-LIO2
 
 A pure-Rust reimplementation of the [FAST-LIO2](https://github.com/hku-mars/FAST_LIO) LiDAR-Inertial Odometry algorithm. No ROS dependency, no C++ FFI required (optional PCL FFI available behind a feature flag).
 
@@ -62,13 +62,13 @@ View with: `rerun output.rrd`
 
 ## Library API
 
-The crate is also a library (`use fastlio2::*`). The core interface is:
+The crate is also a library (`use fastlio_rs::*`). The core interface is:
 
 ### Quick start
 
 ```rust
-use fastlio2::commons::*;
-use fastlio2::map_builder::{MapBuilder, BuilderStatus};
+use fastlio_rs::commons::*;
+use fastlio_rs::map_builder::{MapBuilder, BuilderStatus};
 
 // Load config from YAML or use defaults
 let config = Config::default();

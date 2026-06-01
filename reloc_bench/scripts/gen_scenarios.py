@@ -92,32 +92,41 @@ def gen_synthetic(reps: int, seed: int) -> None:
 
 
 def gen_real(dataset: Path, reps: int, seed: int, query_stride: int,
-             map_stride: int, map_voxel: float) -> None:
+             map_stride: int, map_voxel: float, name: str = "hk_village3") -> None:
     if not dataset.exists():
-        print(f"  (skipping hk_village3: {dataset} not found)")
+        print(f"  (skipping {name}: {dataset} not found)")
         return
-    scen_dir = SCEN_ROOT / "hk_village3"
+    scen_dir = SCEN_ROOT / name
     scen_dir.mkdir(parents=True, exist_ok=True)
 
     _ts, poses = R.load_tum(dataset / "lidar_poses.tum")
     clouds = [c for _, c in R.iter_scans_bin(dataset / "clouds.bin")]
     n = min(len(poses), len(clouds))
-    print(f"  hk_village3: {len(clouds)} clouds, {len(poses)} poses (using {n})")
+
+    # Frame guard: the stock relocalizer aligns a BODY-frame scan to the map via
+    # a body->world guess, so queries must be body-frame. Recover body if the
+    # export is world-frame (see gen_global detection).
+    samp = range(0, n, max(1, n // 40))
+    cmag = np.median([np.linalg.norm(clouds[i][:, :3].mean(0)) for i in samp])
+    pmag = np.median([np.linalg.norm(poses[i][:3]) for i in samp])
+    world_frame = cmag > max(15.0, 0.5 * pmag)
+    print(f"  {name}: {len(clouds)} clouds, {len(poses)} poses (using {n}); "
+          f"cloud frame: {'WORLD->recovering body' if world_frame else 'body'}")
+
+    def body(i: int) -> np.ndarray:
+        pts = clouds[i][:, :3].astype(np.float64)
+        return R.pose_apply(R.pose_inv(R.pose_from_row(poses[i])), pts) if world_frame else pts
 
     # Build the prior map: stitch strided body scans into the world frame.
-    blocks = []
-    for i in range(0, n, map_stride):
-        pts = clouds[i][:, :3].astype(np.float64)
-        if pts.size == 0:
-            continue
-        blocks.append(R.pose_apply(R.pose_from_row(poses[i]), pts))
+    blocks = [R.pose_apply(R.pose_from_row(poses[i]), body(i))
+              for i in range(0, n, map_stride) if clouds[i].size]
     stitched = np.concatenate(blocks)
     world_map = R.voxel_downsample(stitched, map_voxel)
     print(f"  stitched {len(stitched)} -> {len(world_map)} map points (voxel {map_voxel}m)")
     R.write_pcd(scen_dir / "map.pcd", world_map)
 
-    # Query scans are the raw body clouds; truth is the odometry pose.
-    R.write_scans_bin(scen_dir / "scans.bin", [clouds[i][:, :3] for i in range(n)])
+    # Query scans are body clouds; truth is the odometry pose; guess = truth + offset.
+    R.write_scans_bin(scen_dir / "scans.bin", [body(i).astype(np.float32) for i in range(n)])
 
     prng = np.random.default_rng(seed + 2)
     trials: list[dict] = []
@@ -131,7 +140,70 @@ def gen_real(dataset: Path, reps: int, seed: int, query_stride: int,
                     "scan_idx": idx, "bucket": label,
                     "guess": R.pose_to_row(guess), "truth": R.pose_to_row(truth),
                 })
-    _emit(scen_dir, "hk_village3", scen_dir / "map.pcd", scen_dir / "scans.bin", trials)
+    _emit(scen_dir, name, scen_dir / "map.pcd", scen_dir / "scans.bin", trials)
+
+
+def gen_global(dataset: Path, name: str, query_stride: int, window: int,
+               map_stride: int, map_voxel: float, sub_voxel: float, seed: int) -> None:
+    """Scenario for Ivan's GLOBAL relocalizer: a stitched prior map + per-query
+    local submaps (accumulated windows of frames, in the center frame's body
+    frame). No initial guess is used; truth = center frame's world pose. A
+    single sparse Livox frame can't be globally registered, so we accumulate a
+    +/-window neighbourhood via relative odometry (locally accurate).
+    """
+    if not dataset.exists():
+        print(f"  (skipping {name}: {dataset} not found)")
+        return
+    scen_dir = SCEN_ROOT / name
+    scen_dir.mkdir(parents=True, exist_ok=True)
+
+    _ts, poses = R.load_tum(dataset / "lidar_poses.tum")
+    clouds = [c for _, c in R.iter_scans_bin(dataset / "clouds.bin")]
+    n = min(len(poses), len(clouds))
+
+    # Auto-detect cloud frame: if per-frame centroids track the pose translation,
+    # the export already put clouds in WORLD frame (a known export bug for some
+    # datasets); otherwise they're body-frame. Either way we derive world points.
+    samp = range(0, n, max(1, n // 40))
+    cmag = np.median([np.linalg.norm(clouds[i][:, :3].mean(0)) for i in samp])
+    pmag = np.median([np.linalg.norm(poses[i][:3]) for i in samp])
+    # Body-frame clouds are sensor-centred (centroid a few m from origin); a
+    # world-frame export's centroid sits at the robot's world position (~pmag).
+    world_frame = cmag > max(15.0, 0.5 * pmag)
+    frame = "WORLD (clouds pre-transformed)" if world_frame else "body"
+    print(f"  {name}: {len(clouds)} clouds, {len(poses)} poses (using {n}); detected cloud frame: {frame}")
+
+    def world_pts(i: int) -> np.ndarray:
+        pts = clouds[i][:, :3].astype(np.float64)
+        return pts if world_frame else R.pose_apply(R.pose_from_row(poses[i]), pts)
+
+    blocks = [world_pts(i) for i in range(0, n, map_stride) if clouds[i].size]
+    world_map = R.voxel_downsample(np.concatenate(blocks), map_voxel)
+    print(f"  stitched -> {len(world_map)} map points (voxel {map_voxel}m)")
+    R.write_pcd(scen_dir / "map.pcd", world_map)
+
+    # Build a local submap per query center, in that center's body frame.
+    submaps: list[np.ndarray] = []
+    trials: list[dict] = []
+    centers = list(range(window, n - window, query_stride))
+    for si, c in enumerate(centers):
+        Tc_inv = R.pose_inv(R.pose_from_row(poses[c]))
+        acc = []
+        for i in range(c - window, c + window + 1):
+            if clouds[i].size == 0:
+                continue
+            acc.append(R.pose_apply(Tc_inv, world_pts(i)))  # world -> center body frame
+        submap = R.voxel_downsample(np.concatenate(acc), sub_voxel)
+        submaps.append(submap.astype(np.float32))
+        truth = R.pose_from_row(poses[c])  # body_c -> world == what reloc must recover
+        trials.append({"scan_idx": si, "bucket": "global",
+                       "guess": R.pose_to_row((np.zeros(3), np.array([0, 0, 0, 1.0]))),
+                       "truth": R.pose_to_row(truth)})
+    R.write_scans_bin(scen_dir / "scans.bin", submaps)
+    manifest = {"scenario": name, "map": str(scen_dir / "map.pcd"),
+                "scans": str(scen_dir / "scans.bin"), "buckets": ["global"], "trials": trials}
+    (scen_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    print(f"  {name}: {len(trials)} query submaps -> {scen_dir}")
 
 
 def main(
@@ -142,14 +214,27 @@ def main(
     query_stride: int = typer.Option(18, "--query-stride", help="sample every Nth real scan"),
     map_stride: int = typer.Option(2, "--map-stride", help="stitch every Nth scan into map"),
     map_voxel: float = typer.Option(0.1, "--map-voxel"),
-    only: str = typer.Option("", "--only", help="synthetic|real (default both)"),
+    real_name: str = typer.Option("hk_village3", "--real-name", help="scenario dir name for --only real"),
+    only: str = typer.Option("", "--only", help="synthetic|real|global (default: synthetic+real)"),
+    # global-relocalizer scenario (Ivan's FPFH+RANSAC)
+    global_dataset: Path = typer.Option(
+        HERE.parents[1] / "data" / "loop_bench" / "outdoor_small_loop", "--global-dataset"),
+    global_name: str = typer.Option("outdoor_small_loop", "--global-name"),
+    global_query_stride: int = typer.Option(220, "--global-query-stride"),
+    global_window: int = typer.Option(15, "--global-window", help="+/- frames per submap"),
+    global_map_stride: int = typer.Option(8, "--global-map-stride"),
+    global_map_voxel: float = typer.Option(0.25, "--global-map-voxel"),
+    global_sub_voxel: float = typer.Option(0.1, "--global-sub-voxel"),
 ) -> None:
     SCEN_ROOT.mkdir(parents=True, exist_ok=True)
     print(f"generating scenarios -> {SCEN_ROOT}")
     if only in ("", "synthetic"):
         gen_synthetic(reps, seed)
     if only in ("", "real"):
-        gen_real(dataset, reps, seed, query_stride, map_stride, map_voxel)
+        gen_real(dataset, reps, seed, query_stride, map_stride, map_voxel, name=real_name)
+    if only == "global":
+        gen_global(global_dataset, global_name, global_query_stride, global_window,
+                   global_map_stride, global_map_voxel, global_sub_voxel, seed)
 
 
 if __name__ == "__main__":

@@ -2,34 +2,55 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-BINARY="./result/bin/fastlio2"
-CONFIG="fastlio2/config/lio.yaml"
+BASE_CONFIG="config_examples/mid360.yaml"
 BAG="data/ruwik2_pt3_bag_custom/ruwik2_pt3_bag_custom_0.mcap"
 OUT_DIR="logs.ignore/rust_runs"
 RUNS="${1:-5}"
 DURATION="${2:-60}"
+MAX_VEL="${3:-3.1}"
 
-if [ ! -f "$BINARY" ]; then
-    echo "Binary not found. Run ./run/build first."
-    exit 1
-fi
+# Always run the up-to-date build via nix: the derivation is keyed on the Rust
+# sources, so nix rebuilds automatically whenever they change — no stale
+# ./result binary. We realize it once up front (visible build progress), then
+# invoke it per run with `nix run`.
+echo "Building current binary via nix (rebuilds iff sources changed)…"
+nix build ".#default"
+FASTLIO2=(nix run ".#default" --)
 
 mkdir -p "$OUT_DIR"
+
+# Run with the MapBuilder velocity cap explicitly set to MAX_VEL m/s. Derive a
+# config from the base by overriding the flat top-level max_velocity key.
+CONFIG="$OUT_DIR/capped.yaml"
+grep -v '^[[:space:]]*max_velocity:' "$BASE_CONFIG" > "$CONFIG"
+printf '\nmax_velocity: %s\n' "$MAX_VEL" >> "$CONFIG"
+echo "Velocity cap: ${MAX_VEL} m/s (config: $CONFIG)"
+
+rm -f "$OUT_DIR"/odom_run_*.npy   # drop stale runs so the .rrd matches this set
 
 for i in $(seq 0 $((RUNS - 1))); do
     name=$(printf "odom_run_%02d.npy" "$i")
     echo "Run $((i + 1))/$RUNS → $OUT_DIR/$name"
-    "$BINARY" "$CONFIG" "$BAG" "$OUT_DIR/$name" "$DURATION" 2>/dev/null | tail -1
+    "${FASTLIO2[@]}" "$CONFIG" "$BAG" "$OUT_DIR/$name" "$DURATION" 2>/dev/null | tail -1
 done
+
+# Combine all runs' odometry into one 3D Rerun recording (.rrd). Uses the
+# freshly-built binary from the `nix build` above (./result/bin/odom_rrd).
+RRD="$OUT_DIR/odom_runs.rrd"
+echo ""
+echo "Generating 3D odom recording → $RRD"
+./result/bin/odom_rrd "$RRD" "$OUT_DIR"/odom_run_*.npy
+echo "View in 3D with: rerun $RRD"
 
 echo ""
 echo "Generating plot..."
-/opt/homebrew/bin/python3.11 - "$OUT_DIR" "$RUNS" <<'PYEOF'
+/opt/homebrew/bin/python3.11 - "$OUT_DIR" "$RUNS" "$MAX_VEL" <<'PYEOF'
 import sys, os, json
 import numpy as np
 
 out_dir = sys.argv[1]
 num_runs = int(sys.argv[2])
+max_vel = float(sys.argv[3])
 
 def smooth(arr, window_ms=50, dt_ms=100):
     w = max(1, int(window_ms / dt_ms))
@@ -80,8 +101,14 @@ for i, (t, s) in enumerate(rust_runs):
     traces.append({"x": t.tolist(), "y": s.tolist(), "mode": "lines",
         "name": f"Rust run {i}", "line": {"color": colors[i % len(colors)], "width": 1.5}})
 
-layout = {"title": "FAST-LIO2: Rust Speed Over Time",
-    "xaxis": {"title": "Time (s)"}, "yaxis": {"title": "Speed (m/s)"},
+# Velocity-cap reference line.
+all_t = np.concatenate([t for t, _ in rust_runs]) if rust_runs else np.array([0.0, 1.0])
+traces.append({"x": [float(all_t.min()), float(all_t.max())], "y": [max_vel, max_vel],
+    "mode": "lines", "name": f"velocity cap ({max_vel} m/s)",
+    "line": {"color": "rgba(255,255,255,0.6)", "width": 1.5, "dash": "dot"}})
+
+layout = {"title": f"FAST-LIO2: Rust Speed Over Time (cap {max_vel} m/s, log scale)",
+    "xaxis": {"title": "Time (s)"}, "yaxis": {"title": "Speed (m/s)", "type": "log"},
     "template": "plotly_dark", "legend": {"x": 0.01, "y": 0.99}}
 
 html = f"""<!DOCTYPE html>
@@ -106,9 +133,12 @@ try:
         ax.plot(t_common, lower, '--', color='gray', linewidth=1, alpha=0.6)
     for i, (t, s) in enumerate(rust_runs):
         ax.plot(t, s, linewidth=1.2, color=colors[i % len(colors)], label=f'Rust run {i}')
+    ax.axhline(max_vel, color='white', linestyle=':', linewidth=1.2, alpha=0.6,
+               label=f'velocity cap ({max_vel} m/s)')
+    ax.set_yscale('log')
     ax.set_xlabel('Time (s)'); ax.set_ylabel('Speed (m/s)')
-    ax.set_title('FAST-LIO2: Rust Speed Over Time')
-    ax.legend(loc='upper left'); ax.grid(True, alpha=0.3); fig.tight_layout()
+    ax.set_title(f'FAST-LIO2: Rust Speed Over Time (cap {max_vel} m/s, log scale)')
+    ax.legend(loc='upper left'); ax.grid(True, alpha=0.3, which='both'); fig.tight_layout()
     out_png = os.path.join(out_dir, "speed_comparison.png")
     fig.savefig(out_png, dpi=150)
     print(f"Wrote {out_png}")

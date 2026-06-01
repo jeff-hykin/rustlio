@@ -3,7 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 BINARY="./rust/target/release/fastlio2-rerun"
-CONFIG="fastlio2/config/lio.yaml"
+CONFIG="config_examples/mid360.yaml"
 BAG="${1:-data/ruwik2_pt3_bag_custom/ruwik2_pt3_bag_custom_0.mcap}"
 OUTPUT="${2:-logs.ignore/fastlio2_output.rrd}"
 

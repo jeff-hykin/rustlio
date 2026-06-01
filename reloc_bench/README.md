@@ -70,6 +70,12 @@ cfg k=v     ICP params: rough/refine _scan_resolution _map_resolution
 Then: `./run/reloc_test --backend path/to/rust_backend` (or
 `bench_reloc.py --backend ...`). Same scenarios, same scoring, comparable table.
 
+### Backends
+
+- `harness/build/reloc_bench` — current localizer (two-stage point-to-point ICP). Needs a guess.
+- `harness/build/global_reloc_bench` — C++ port of Ivan's global FPFH+RANSAC relocalizer (dimos `relocalize.py`). No guess.
+- `rust/target/release/reloc_rust` — pure-Rust port of Ivan's relocalizer (`cargo build --release --bin reloc_rust`). No guess; matches the C++ accuracy at ~2× the speed. See `results/rust_vs_cpp.md`.
+
 ## Layout
 
 ```

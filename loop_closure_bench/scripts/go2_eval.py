@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
 """Benchmark PGO on the Go2 onboard source (REAL drift), scored against the
-fastlio trajectory as groundtruth.
+GTSAM groundtruth (gtsam_odom) -- the AprilTag-corrected trajectory from
+run/add_gt, NOT raw fastlio. fastlio is unreliable on hard scenes (it drifted
+~130 m on the grass field); gtsam_odom is tag-consistent everywhere, so it is the
+correct groundtruth. Pass --gt <gtsam_odom.tum>.
 
 The Go2 `odom` is a worse, independent sensor in its own frame with real
-accumulated drift (its 549 m physical loop comes out ~405 m, start->end gap
-~17 m). So unlike the fastlio benchmark we do NOT inject drift; we run PGO on the
-raw Go2 trajectory + Go2 clouds and ask whether loop closure pulls it back toward
-the (good) fastlio trajectory. Because the two sensors live in different frames,
-we rigidly align (Umeyama, with and without scale) keyframe positions to the
-fastlio groundtruth before computing ATE -- reported before (raw) and after PGO.
+accumulated drift. We do NOT inject drift; we run PGO on the raw Go2 trajectory +
+Go2 clouds and ask whether loop closure pulls it toward the gtsam_odom truth.
+Because the sensors live in different frames we rigidly align (Umeyama, with and
+without scale) before computing ATE -- reported before (raw) and after PGO.
 
-    python3 go2_eval.py [key=val ...]      # forwards pgo args to the rust harness
+    python3 go2_eval.py --go2 <dir> --gt <gtsam_odom.tum> [key=val ...]
 """
 import json, math, os, subprocess, sys, tempfile, bisect
 import numpy as np
@@ -19,9 +20,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO = os.path.dirname(ROOT)
 HARNESS_RUST = f"{ROOT}/rust/target/release/pgo_bench_rs"
 HARNESS_CPP = f"{ROOT}/harness/build/pgo_bench"
-# Defaults; override with --go2 <dir> and --gt <fastlio lidar_poses.tum>.
+# Defaults; override with --go2 <dir> and --gt <gtsam_odom.tum>.
 GO2 = f"{REPO}/data/loop_bench/outdoor_small_loop_go2"
-GT = f"{REPO}/data/loop_bench/outdoor_small_loop/lidar_poses.tum"  # fastlio = groundtruth
+GT = os.path.expanduser("~/datasets/fastlio_recordings/gtsam_odom.tum")  # gtsam_odom GT
 
 
 def read_tum(path):

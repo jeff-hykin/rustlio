@@ -437,3 +437,26 @@ unsolvable (no reliable GT); all methods ~no-op there, none catastrophic for go2
 **Priority confirmed:** improve the Rust loop ICP (PCL-grade point-to-plane /
 multi-candidate validation) so loops are trustworthy — that is what gates both
 the corruption on fastlio scenes and the inability to close loops on go2.
+
+## Finding 13 — benchmark now scores against gtsam_odom GT (run/add_gt)
+
+fastlio is unreliable groundtruth on hard scenes (it drifted ~130 m on grass).
+`run/add_gt <db>` now builds a tag-consistent GT (gtsam_odom: fastlio/odom +
+AprilTag landmark SLAM) and writes it into the db; `go2_eval.py` scores against
+gtsam_odom instead of fastlio. This re-scores the Go2 real-drift cases honestly
+(grass raw dropped 53.8 -> 24.0 m once the GT itself is correct).
+
+Go2 source vs gtsam_odom GT (sim-ATE m, raw -> after PGO):
+| case | raw | stock | plane | rust(arc) | rust+SC |
+|------|----:|------:|------:|----------:|--------:|
+| outdoor | 6.62 | 35.91 | **2.58** | 9.75 | 5.87 |
+| grass   | 23.96 | 25.08 | 24.94 | 24.18 | **23.94** |
+| stair   | 2.41 | 7.93 | 14.65 | 2.51 | **2.24** |
+
+**rust+ScanContext is the only config that never corrupts** — it is <= raw on all
+three (improves outdoor & stair, holds on the ~unsolvable grass). **C++ plane wins
+outdoor (2.58) but CORRUPTS stair (14.65)**; C++ stock corrupts all three. So on
+the worse Go2 sensor the robust choice is rust+SC (do-no-harm), while C++ is
+higher-ceiling but dangerous. The remaining outdoor gap (rust+SC 5.87 vs plane
+2.58) is rust loop-ICP measurement quality -> trustworthy translation would let
+rust close it too (the active ICP work item).

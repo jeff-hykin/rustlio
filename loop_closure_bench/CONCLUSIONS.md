@@ -363,3 +363,40 @@ drift instead of the spatial-nearest) and better Rust loop **measurement**
 (multi-candidate ICP validation, matching what C++ does). The trust/distrust
 back-end tuning was all on the good fastlio source and cannot manufacture a good
 loop where detection/measurement fail.
+
+## Finding 11 — Scan Context loop detector (descriptor-based, toggleable)
+
+Added `scan_context.rs`: a Scan Context (Kim & Kim 2018) place-recognition loop
+detector as a drop-in alternative to spatial-NN, selected with `use_scan_context=1`
+(default off). Descriptor = rings x sectors max-height grid (column-major for a
+cache-friendly shift distance); rotation-invariant ring-key shortlists candidates,
+a column-shift-invariant distance scores them and yields a relative-yaw estimate.
+Performance fix: column-major storage took seq07 from 31 s -> 0.6 s.
+
+**SC matches or beats spatial-NN everywhere tested** (rust ATE, lower better):
+| case | spatial | scan-context |
+|------|--------:|-------------:|
+| KITTI seq00 clean | 0.756 | **0.648** |
+| KITTI seq05 clean | 0.051 | **0.023** |
+| KITTI seq07 clean | 0.012 | **0.006** |
+| Go2 (sim ATE, distrust) | 7.90 (no-op) | **6.86** |
+
+It finds cleaner loops (fewer false positives) on the good sensors. On the **Go2
+short-range sensor it helps only modestly** (6.86 vs 7.90; gap 17.3->15.7 vs no
+change) and still does NOT close the loop like C++ plane (2.02 / 0.75). Two
+reasons, both sensor-driven:
+1. **Descriptor not distinctive at ~4.6 m range.** SC normally uses ~80 m scans;
+   a 5 m disc of mostly ground gives weak descriptors, so SC's end keyframes match
+   mid-route (tgt 292/524) instead of the start -- the same wrong-place failure as
+   spatial, for a different reason (weak appearance, not drift).
+2. **Rust ICP measurement.** Even when a loop is found, trusting its translation
+   corrupts (short-range -> poor overlap), so it must distrust -> rotation-only
+   correction -> small gain. C++'s PCL point-to-plane gives trustworthy
+   translation on the same clouds and closes the gap.
+
+**Takeaway.** SC is a net win and the right detector for drift-robust place
+recognition (clear gains on long-range KITTI). It is NOT a silver bullet for the
+Go2 sensor, where the limits are descriptor range and Rust ICP quality, not the
+detector choice. Next: improve the Rust loop ICP (match PCL point-to-plane /
+multi-candidate validation) so found loops can be trusted; and SC++ augmentation
+(intensity / multi-resolution descriptors) for short-range distinctiveness.

@@ -15,6 +15,7 @@ use kiddo::{KdTree, SquaredEuclidean};
 use nalgebra::{Isometry3, Matrix6, Quaternion, Translation3, UnitQuaternion, Vector3};
 
 use crate::icp;
+use crate::scan_context::{self, Descriptor, ScanContextConfig};
 
 assign_symbols!(X: SE3);
 
@@ -48,6 +49,12 @@ pub struct PgoConfig {
     pub loop_info_max_sigma: f64, // loosest allowed loop sigma (max distrust on sliding dirs)
     pub loop_info_min_sigma: f64, // tightest allowed loop sigma (cap over-trust on stiff dirs)
     pub loop_trans_scale: f64, // if >0: loop trans sigma = scale * loop arc length (auto, dynamic)
+    // Scan Context loop detection (place recognition) instead of spatial-NN. Finds
+    // the true revisit under drift, where spatial-NN matches the wrong place.
+    pub use_scan_context: bool,
+    pub sc_max_range: f64,    // descriptor max range (m); tune to sensor range
+    pub sc_dist_thresh: f64,  // SC distance acceptance (0..1)
+    pub sc_plus: bool,        // use SC++ cartesian descriptor too
 }
 
 impl Default for PgoConfig {
@@ -90,6 +97,10 @@ impl Default for PgoConfig {
             // open & indoor trajectories, but off by default because it over-distrusts
             // closed-loop (return-home) trajectories. See CONCLUSIONS.md Finding 9.
             loop_trans_scale: 0.0,
+            use_scan_context: false,
+            sc_max_range: 80.0,
+            sc_dist_thresh: 0.4,
+            sc_plus: true,
         }
     }
 }
@@ -99,6 +110,7 @@ struct KeyPose {
     optimized: Isometry3<f64>,
     ts: f64,
     cloud: Vec<Vector3<f64>>, // body frame, voxel-downsampled
+    sc: Option<Descriptor>,   // Scan Context descriptor (body frame); None if disabled
 }
 
 pub struct LoopEdge {
@@ -165,6 +177,13 @@ impl Pgo {
         }
     }
 
+    fn sc_config(&self) -> ScanContextConfig {
+        let mut c = ScanContextConfig::default();
+        c.max_range = self.cfg.sc_max_range;
+        c.dist_thresh = self.cfg.sc_dist_thresh;
+        c
+    }
+
     fn is_keyframe(&self, local: &Isometry3<f64>) -> bool {
         match self.keyposes.last() {
             None => true,
@@ -183,7 +202,12 @@ impl Pgo {
         }
         let cloud = voxel_downsample(body_cloud, self.cfg.submap_resolution);
         let optimized = self.world_correction * local;
-        self.keyposes.push(KeyPose { local, optimized, ts, cloud });
+        let sc = if self.cfg.use_scan_context {
+            Some(scan_context::compute(&cloud, &self.sc_config()))
+        } else {
+            None
+        };
+        self.keyposes.push(KeyPose { local, optimized, ts, cloud, sc });
         self.search_for_loops();
         self.smooth_and_update();
     }
@@ -210,26 +234,40 @@ impl Pgo {
         if self.last_loop_ts >= 0.0 && cur_ts - self.last_loop_ts < self.cfg.min_loop_detect_duration {
             return;
         }
-        let cur_t = self.keyposes[n - 1].optimized.translation.vector;
-
-        let entries: Vec<[f64; 3]> = self.keyposes[..n - 1]
-            .iter()
-            .map(|kp| {
-                let t = kp.optimized.translation.vector;
-                [t.x, t.y, t.z]
-            })
-            .collect();
-        let tree: KdTree<f64, 3> = (&entries).into();
-        let r2 = self.cfg.loop_search_radius * self.cfg.loop_search_radius;
-        let mut found = tree.within::<SquaredEuclidean>(&[cur_t.x, cur_t.y, cur_t.z], r2);
-        found.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
-
+        // Candidate selection: Scan Context (appearance/place-recognition, robust
+        // to drift) or the default spatial nearest-neighbour in the drifted frame.
         let mut loop_idx: i32 = -1;
-        for nn in &found {
-            let i = nn.item as usize;
-            if (cur_ts - self.keyposes[i].ts).abs() > self.cfg.loop_time_thresh {
-                loop_idx = i as i32;
-                break;
+        if self.cfg.use_scan_context {
+            let cur_sc = self.keyposes[n - 1].sc.as_ref().unwrap();
+            // time-gated past descriptors (exclude recent revisits)
+            let past: Vec<(usize, &Descriptor)> = self.keyposes[..n - 1]
+                .iter()
+                .enumerate()
+                .filter(|(_, kp)| (cur_ts - kp.ts).abs() > self.cfg.loop_time_thresh)
+                .filter_map(|(i, kp)| kp.sc.as_ref().map(|d| (i, d)))
+                .collect();
+            if let Some((j, _dist, _yaw)) = scan_context::best_match(cur_sc, &past, &self.sc_config()) {
+                loop_idx = past[j].0 as i32;
+            }
+        } else {
+            let cur_t = self.keyposes[n - 1].optimized.translation.vector;
+            let entries: Vec<[f64; 3]> = self.keyposes[..n - 1]
+                .iter()
+                .map(|kp| {
+                    let t = kp.optimized.translation.vector;
+                    [t.x, t.y, t.z]
+                })
+                .collect();
+            let tree: KdTree<f64, 3> = (&entries).into();
+            let r2 = self.cfg.loop_search_radius * self.cfg.loop_search_radius;
+            let mut found = tree.within::<SquaredEuclidean>(&[cur_t.x, cur_t.y, cur_t.z], r2);
+            found.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
+            for nn in &found {
+                let i = nn.item as usize;
+                if (cur_ts - self.keyposes[i].ts).abs() > self.cfg.loop_time_thresh {
+                    loop_idx = i as i32;
+                    break;
+                }
             }
         }
         if loop_idx < 0 {

@@ -3,6 +3,7 @@
 mod icp;
 mod io;
 mod pgo;
+mod scan_context;
 
 use std::collections::HashMap;
 
@@ -109,6 +110,10 @@ fn main() {
     cfg.loop_info_max_sigma = getd("loop_info_max_sigma", cfg.loop_info_max_sigma);
     cfg.loop_info_min_sigma = getd("loop_info_min_sigma", cfg.loop_info_min_sigma);
     cfg.loop_trans_scale = getd("loop_trans_scale", cfg.loop_trans_scale);
+    cfg.use_scan_context = geti("use_scan_context", cfg.use_scan_context as i32) != 0;
+    cfg.sc_max_range = getd("sc_max_range", cfg.sc_max_range);
+    cfg.sc_dist_thresh = getd("sc_dist_thresh", cfg.sc_dist_thresh);
+    cfg.sc_plus = geti("sc_plus", cfg.sc_plus as i32) != 0;
 
     let frames = io::load(&poses, &clouds);
     eprintln!("[pgo_bench_rs] loaded {} frames", frames.len());

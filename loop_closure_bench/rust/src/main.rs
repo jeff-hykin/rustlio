@@ -108,6 +108,7 @@ fn main() {
     cfg.reg_sigma = getd("reg_sigma", cfg.reg_sigma);
     cfg.loop_info_max_sigma = getd("loop_info_max_sigma", cfg.loop_info_max_sigma);
     cfg.loop_info_min_sigma = getd("loop_info_min_sigma", cfg.loop_info_min_sigma);
+    cfg.loop_trans_scale = getd("loop_trans_scale", cfg.loop_trans_scale);
 
     let frames = io::load(&poses, &clouds);
     eprintln!("[pgo_bench_rs] loaded {} frames", frames.len());
@@ -136,7 +137,7 @@ fn main() {
         .collect();
     if std::env::var("ICP_LOG").is_ok() {
         for l in &graph.history {
-            eprintln!("[rust loop] src={} tgt={} icp_t={:.3}", l.source, l.target, l.icp_t);
+            eprintln!("[rust loop] src={} tgt={} icp_t={:.3} arc={:.1}", l.source, l.target, l.icp_t, l.arc);
         }
     }
     eprintln!("[pgo_bench_rs] keyframes={} loops={}", kfs.len(), loops.len());

@@ -271,3 +271,42 @@ And the value is not knife-edge: clean seq05 ATE is 0.48 / 0.15 / 0.05 m at
 trans_floor 16 / 64 / 256 — anything "large" works, so a regime default
 generalizes without per-dataset tuning. The `loop_icp_cov` path is kept
 (off by default) as a documented dead-end for this failure mode.
+
+## Finding 9 — can the loop_trans_floor magic number be auto-derived? (partly)
+
+"How does a user know to set loop_trans_floor=256?" They shouldn't. Attempt:
+replace it with an automatic, dynamic per-loop law. Two physically-motivated
+levers were implemented and benchmarked (both via `loop_trans_scale>0`, the arc
+form is what's wired):
+
+- **Loop arc length** (trans sigma = clamp(0.02 * loop_arc, 0.05, 16)). The loop
+  span is the lever arm that amplifies a small loop-translation error into a
+  tail-swing. Result: **reproduces the KITTI win without the magic number** (mean
+  ATE 0.882 vs 0.876 for the hand-set value, ~2x better than C++) AND **improves
+  the indoor aggregate** (0.894 vs 1.021 baseline: big low-drift wins, small
+  high-drift losses). But it **over-distrusts the closed-loop outdoor set**
+  (outdoor_small_loop y0.1 1.89->4.0, y0.3 7.2->12): a 549 m loop that returns
+  home scales to sigma ~11 m when it actually wants ~1.4 m.
+- **Downstream path length** (path after the loop to the trajectory end). Fixes
+  some outdoor cells but regresses KITTI clean (seq05 0.05->1.61) and still breaks
+  outdoor y0.1 (->7.4).
+
+**Why neither is universal:** KITTI's late loops and the outdoor closing loops are
+*indistinguishable* in both loop-span and downstream-length, yet want opposite
+translation trust. KITTI is an OPEN traverse (the "loop" is a parallel road, the
+vehicle keeps going -> a translation constraint swings the rest); the outdoor set
+CLOSES (returns to start -> the constraint just pins the loop, trust it). Open vs
+closed is a GLOBAL trajectory-structure property; no per-loop scalar captures it.
+
+**Conclusion.** The arc-length law is shipped as an opt-in (`loop_trans_scale`,
+default off) and is the recommended setting for OPEN / exploratory operation
+(automotive, a robot roaming inside->park->inside) and indoor -- there it is
+genuinely flag-free and dynamic. The safe default stays the fixed
+`loop_trans_floor` (regime-selected: indoor trusts translation, outdoor/KITTI
+distrust) because forcing the arc law would regress the closed-loop outdoor set,
+and "don't regress local" is a hard constraint. Fully-automatic across open AND
+closed needs a global open/closed (or graph-connectivity) signal, not a per-loop
+lever -- logged as the next step. (Loop-search radius and submap resolution also
+still scale with scene; the relocalization-style "estimate base_res from median
+point spacing and scale all distances" would auto-handle those, and is the
+natural companion to this.)

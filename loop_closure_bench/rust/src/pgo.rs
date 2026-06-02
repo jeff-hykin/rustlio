@@ -47,6 +47,7 @@ pub struct PgoConfig {
     pub reg_sigma: f64,       // per-point registration noise (m) scaling the ICP information
     pub loop_info_max_sigma: f64, // loosest allowed loop sigma (max distrust on sliding dirs)
     pub loop_info_min_sigma: f64, // tightest allowed loop sigma (cap over-trust on stiff dirs)
+    pub loop_trans_scale: f64, // if >0: loop trans sigma = scale * loop arc length (auto, dynamic)
 }
 
 impl Default for PgoConfig {
@@ -77,8 +78,18 @@ impl Default for PgoConfig {
             lm_fidelity: -1e4,
             loop_icp_cov: false,
             reg_sigma: 0.1,
-            loop_info_max_sigma: 50.0,
+            // Max loop translation sigma (loosest / most-distrusted). Also caps the
+            // arc-scaled distrust so very long loops -- which carry large drift to
+            // correct -- don't get so loose they under-correct (without this,
+            // seq02's km loops scale to ~40 m and under-correct; 16 m matches the
+            // hand-tuned trans_floor). Generous safety bound, result is insensitive.
+            loop_info_max_sigma: 16.0,
             loop_info_min_sigma: 0.05,
+            // Opt-in (0 = off, use fixed loop_trans_floor). When >0 (e.g. 0.02),
+            // loop translation sigma = clamp(scale*arc, min, max) -- auto/dynamic for
+            // open & indoor trajectories, but off by default because it over-distrusts
+            // closed-loop (return-home) trajectories. See CONCLUSIONS.md Finding 9.
+            loop_trans_scale: 0.0,
         }
     }
 }
@@ -99,6 +110,7 @@ pub struct LoopEdge {
     pub score: f64,
     pub icp_t: f64, // magnitude of the ICP correction (≈0 = no slide on clean data)
     pub info: Matrix6<f64>, // ICP plane Hessian (rotation-first); loop information up to 1/σ²
+    pub arc: f64,   // odometry arc length between the looped keyframes (lever arm, m)
 }
 
 pub struct Pgo {
@@ -249,6 +261,16 @@ impl Pgo {
         {
             return;
         }
+        // Loop span = odometry arc length between the two looped keyframes. This
+        // is the lever arm that turns a small loop-translation error into a large
+        // tail-swing, so it sets how much to distrust the loop's translation
+        // (see loop_trans_scale). Drift-free (uses raw local odometry).
+        let mut arc = 0.0;
+        for i in (loop_idx as usize)..(cur_idx as usize) {
+            arc += (self.keyposes[i + 1].local.translation.vector
+                - self.keyposes[i].local.translation.vector)
+                .norm();
+        }
         self.cache.push(LoopEdge {
             target: loop_idx as usize,
             source: cur_idx as usize,
@@ -258,6 +280,7 @@ impl Pgo {
             score: res.fitness,
             icp_t: res.transform.translation.vector.norm(),
             info: res.info,
+            arc,
         });
         self.last_loop_ts = cur_ts;
     }
@@ -312,7 +335,22 @@ impl Pgo {
                 }
             }
             let rot_sig = self.cfg.loop_rot_var.sqrt();
-            let trans_sig = lp.score.max(self.cfg.loop_trans_floor).sqrt();
+            // OPT-IN (loop_trans_scale>0): auto, dynamic translation distrust scaled
+            // by the loop's arc length -- trans sigma = clamp(scale*arc, min, max).
+            // Replaces the hand-set loop_trans_floor for OPEN/exploratory trajectories
+            // (automotive, robots that keep exploring) and indoor: short loops trust
+            // translation, long open-traverse loops distrust it, dynamically per-loop
+            // with no flags. NOT a universal default -- a trajectory that CLOSES back
+            // on itself (returns home) at the same arc wants the opposite (trust), and
+            // arc length can't distinguish open from closed (downstream length can't
+            // either; it's a global-structure property). So it stays opt-in and the
+            // safe default remains the fixed loop_trans_floor. See CONCLUSIONS.md F9.
+            let trans_sig = if self.cfg.loop_trans_scale > 0.0 {
+                (self.cfg.loop_trans_scale * lp.arc)
+                    .clamp(self.cfg.loop_info_min_sigma, self.cfg.loop_info_max_sigma)
+            } else {
+                lp.score.max(self.cfg.loop_trans_floor).sqrt()
+            };
             if robust {
                 graph.add_factor(fac![
                     BetweenResidual::new(to_se3(&lp.offset)),

@@ -33,11 +33,12 @@ STOCK = COMMON
 PLANE = ["impl=plane"] + COMMON
 # Rust: the km-scale fix is the LOOP NOISE MODEL, not the optimizer. On wide-open
 # KITTI roads the loop's translation constraint yanks the long open trajectory
-# tail (a small ICP error swings the far end metres), so we heavily distrust loop
-# translation (loop_trans_floor=256 -> trans sigma 16 m) while trusting rotation
-# (loop_rot_var=0.05) -- the loop then corrects accumulated yaw without dragging
-# position. This took rust from diverging (00->12.5, 05->23, 08->11 m) to beating
-# C++ on aggregate. max_loop_offset rejects gross false loops. See CONCLUSIONS.md.
+# tail (a small ICP error swings the far end metres), so distrust loop translation
+# (loop_trans_floor=256 -> sigma 16 m) while trusting rotation. The auto arc-length
+# alternative (loop_trans_scale=0.02) reproduces these numbers without the magic
+# value and also serves indoor, but is off by default as it over-distrusts the
+# closed-loop outdoor set -- see CONCLUSIONS.md Finding 9. max_loop_offset rejects
+# gross false loops.
 RUST = ["backend=rust", "max_loop_offset=8.0", "loop_trans_floor=256.0"] + [
     c.replace("loop_time_tresh", "loop_time_thresh") for c in COMMON
 ]

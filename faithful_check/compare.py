@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Faithfulness comparison: overlay the Rust fastlio_rs trajectory against the
+Faithfulness comparison: overlay the Rust rustlio trajectory against the
 upstream C++ FAST-LIO trajectory, truncated where upstream diverges.
 
 Inputs:
@@ -181,7 +181,7 @@ def main():
     ax[1, 1].set(title="aligned position error vs time", xlabel="t [s]", ylabel="error [m]")
     ax[1, 1].legend(fontsize=9); ax[1, 1].grid(alpha=0.3)
 
-    fig.suptitle(f"fastlio_rs vs upstream C++ FAST-LIO  —  {'PASS' if passed else 'FAIL'}  "
+    fig.suptitle(f"rustlio vs upstream C++ FAST-LIO  —  {'PASS' if passed else 'FAIL'}  "
                  f"(3D-RMSE {rms(d3_err):.2f} m, XY {rms(xy_err):.2f}, Z {rms(z_err):.2f}, "
                  f"scale {scale:.3f})", fontsize=13)
     fig.tight_layout(rect=(0, 0, 1, 0.98))

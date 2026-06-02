@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-Dump a raw Livox Mid-360 pcap into a flat binary that both the Rust fastlio_rs
+Dump a raw Livox Mid-360 pcap into a flat binary that both the Rust rustlio
 flat-runner and the C++ reference harness read, so both LIO implementations
 consume byte-identical IMU + lidar input (removing any parse/format ambiguity
 from the comparison).
 
-Parsing mirrors fastlio_rs's parse_livox_custom_msg / parse_imu_cdr exactly:
+Parsing mirrors rustlio's parse_livox_custom_msg / parse_imu_cdr exactly:
   - accel converted g -> m/s^2 with *9.80665
   - lidar points kept where line<4 and (tag&0x30) in {0x10,0x00}, range-gated,
     every `filter_num`-th point, curvature = offset_time_ns/1e6 (ms), plus the
-    consecutive-duplicate drop fastlio_rs applies.
+    consecutive-duplicate drop rustlio applies.
 
 Flat format (little-endian):
   magic "FLT1" (4 bytes)

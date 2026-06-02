@@ -1,7 +1,7 @@
 use std::path::Path;
-use fastlio_rs::commons::*;
-use fastlio_rs::map_builder::{BuilderStatus, MapBuilder};
-use fastlio_rs::utils;
+use rustlio::commons::*;
+use rustlio::map_builder::{BuilderStatus, MapBuilder};
+use rustlio::utils;
 use ndarray::Array2;
 use ndarray_npy::write_npy;
 
@@ -224,7 +224,7 @@ fn main() {
         .unwrap_or(60.0);
 
     let config = load_config(config_path);
-    fastlio_rs::logging::init(config.log_level);
+    rustlio::logging::init(config.log_level);
     log::info!("Loading config from: {}", config_path);
 
     log::info!("Reading MCAP bag: {}", bag_path);

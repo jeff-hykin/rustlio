@@ -1,0 +1,15 @@
+{
+  "go2_6_05pm": [
+    {
+      "bucket": "global",
+      "n": 32,
+      "conv_rate": 0.0,
+      "correct_rate": 0.0,
+      "te_med": NaN,
+      "te_p90": NaN,
+      "re_med": NaN,
+      "re_p90": NaN,
+      "ms_med": 147.0825835
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+source	config	ate_rigid	ate_sim	loop_gap	verdict
+go2_outdoor	raw	12.88	7.50	17.31	none
+go2_outdoor	stock	35.67	34.81	99.03	corrupts
+go2_outdoor	gated	36.01	35.25	97.20	corrupts
+go2_outdoor	plane	11.88	2.02	0.75	closes_loop
+go2_outdoor	rust_distrust	12.98	7.90	18.18	no_op
+go2_outdoor	rust_trust	23.24	23.18	59.70	corrupts

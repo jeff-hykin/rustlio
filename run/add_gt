@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# add_gt <recording.db> — mutate a dimos mem2.db IN PLACE to add groundtruth:
+#   1. `apriltags`   stream — AprilTag detections as relative poses (tag-in-camera)
+#   2. `gtsam_odom`  stream — drift-corrected trajectory from a landmark SLAM:
+#        fastlio/odom chain (locally correct) + AprilTags as static landmarks,
+#        solved with GTSAM. A tag seen at multiple times pins the chain and
+#        removes accumulated odometry drift.
+#
+# Assumes the db has a `color_image` stream and either `fastlio_odometry` or some
+# `*odom*` stream with populated pose columns. Go2 camera intrinsics + extrinsic
+# are hardcoded for now (transform-frame generality is a later task).
+#
+# Usage: ./run/add_gt /path/to/recording.db
+set -euo pipefail
+
+if [[ $# -lt 1 ]]; then
+  echo "usage: $0 <recording.db>" >&2
+  exit 1
+fi
+DB="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"  # absolute
+[[ -f "$DB" ]] || { echo "!! no such file: $DB" >&2; exit 1; }
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+SCRIPTS="$ROOT/loop_closure_bench/scripts"
+DIMOS="${DIMOS_DIR:-$HOME/repos/dimos3}"
+TMP="$(mktemp -d)"
+trap 'rm -rf "$TMP"' EXIT
+
+echo ">> [1/3] detecting AprilTags -> 'apriltags' stream (dimos env)..."
+( cd "$DIMOS" && uv run --no-sync python "$SCRIPTS/add_apriltags_to_db.py" \
+    --db "$DB" --markers-out "$TMP/markers.json" --meta-out "$TMP/meta.json" )
+
+echo ">> [2/3] solving gtsam_odom (fastlio/odom + AprilTag landmarks)..."
+uv run --with gtsam --with numpy python "$SCRIPTS/build_gtsam_gt.py" \
+    --db "$DB" --markers "$TMP/markers.json" --meta "$TMP/meta.json" --out "$TMP/gtsam_odom.tum"
+
+echo ">> [3/3] writing 'gtsam_odom' stream into db (dimos env)..."
+( cd "$DIMOS" && uv run --no-sync python "$SCRIPTS/write_gtsam_odom_to_db.py" \
+    --db "$DB" --tum "$TMP/gtsam_odom.tum" )
+
+echo ">> done: $DB now has 'apriltags' + 'gtsam_odom' streams"

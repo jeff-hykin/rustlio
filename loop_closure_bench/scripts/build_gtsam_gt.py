@@ -37,7 +37,9 @@ def main():
     ap.add_argument("--markers", required=True)
     ap.add_argument("--meta", required=True)
     ap.add_argument("--out", required=True)
-    ap.add_argument("--pose-stream", default="fastlio_odometry")
+    ap.add_argument("--pose-stream", default="auto",
+                    help="'auto' picks fastlio_odometry, else an *odom* stream with "
+                         "populated pose columns")
     ap.add_argument("--node-stride", type=int, default=3, help="subsample fastlio nodes")
     ap.add_argument("--odom-rot-sig", type=float, default=0.004)   # rad/edge (fastlio local)
     ap.add_argument("--odom-trans-sig", type=float, default=0.02)  # m/edge
@@ -46,11 +48,29 @@ def main():
     ap.add_argument("--tag-huber", type=float, default=0.5)        # robust kernel (m, whitened)
     args = ap.parse_args()
 
-    # --- fastlio odometry nodes (pose columns) ---
+    # --- odometry nodes (pose columns) ---
     conn = sqlite3.connect(args.db)
+    pose_stream = args.pose_stream
+    if pose_stream == "auto":
+        names = [r[0] for r in conn.execute("SELECT name FROM _streams").fetchall()]
+        # prefer fastlio_odometry, then any *odom* stream; require populated pose cols
+        cand = [n for n in ["fastlio_odometry"] if n in names]
+        cand += [n for n in names if "odom" in n.lower() and n not in cand]
+        pose_stream = None
+        for n in cand:
+            try:
+                c = conn.execute(f'SELECT count(*) FROM "{n}" WHERE pose_qw IS NOT NULL').fetchone()[0]
+            except sqlite3.OperationalError:
+                continue
+            if c > 0:
+                pose_stream = n
+                break
+        if pose_stream is None:
+            raise SystemExit(f"no odom stream with populated pose columns among {cand}")
+        print(f"auto-picked pose stream: {pose_stream}")
     rows = conn.execute(
         f'SELECT ts,pose_x,pose_y,pose_z,pose_qx,pose_qy,pose_qz,pose_qw '
-        f'FROM "{args.pose_stream}" WHERE pose_qw IS NOT NULL ORDER BY ts'
+        f'FROM "{pose_stream}" WHERE pose_qw IS NOT NULL ORDER BY ts'
     ).fetchall()
     conn.close()
     rows = rows[::args.node_stride]

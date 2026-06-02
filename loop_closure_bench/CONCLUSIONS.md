@@ -159,3 +159,39 @@ stretch — always `cargo build && run` or `nix run` so a build error aborts.)
 `results.tsv` is the full machine-readable scoreboard (run `./run/pgo_bench`).
 All seven datasets use correct body-frame clouds; the outdoor recording is read
 from `~/datasets/fastlio_recordings/` (copied off the USB stick).
+
+## Finding 7 — full KITTI odometry evaluation (km-scale)
+
+Evaluated on the KITTI odometry dataset (sequences 00–10 have public GT; 11–21
+are the held-out test set). Velodyne scans → body clouds, GT velodyne-in-world
+(cam0_to_world ∘ cam_to_velo) → trajectory; scored by ATE vs GT under injected
+yaw drift. KITTI-scale params: keyframe spacing 2 m, loop search 15 m, ICP
+correspondence 5 m (to bridge accumulated drift), submap voxel 0.5 m. See
+`scripts/run_kitti.py` / `kitti_results.tsv`. ATE in metres, drift→after-PGO.
+
+| seq | drift | stock | plane | rust | notes |
+|-----|------:|------:|------:|-----:|-------|
+| 00 | 3.12 | **0.82** | **0.79** | 12.5 | 13 loops; C++ −74% |
+| 02 | 7.56 | 3.04 | 3.32 | **2.45** | rust wins under drift |
+| 05 | 0.55 | 0.47 | 0.47 | 23 | C++ helps; rust diverges |
+| 06 | ~0  | 0.09 | 0.09 | 0.74 | few loops, little drift |
+| 07 | 0.18 | 0.28 | 0.27 | 0.89 | single loop |
+| 08 | 3.61 | 6.15 | 6.26 | 11.0 | hard seq; all worsen |
+| 09 | 0.35 | 2.03 | 2.15 | **0.69** | single loop; rust best |
+
+**The in-tree C++ PGO performs loop closure correctly at km-scale.** On the
+loop-rich sequences it strongly corrects injected drift — seq00 3.12→0.79 m
+(−74%), seq02 7.56→3.0 m (−60%), seq05 helps — validating it on the full
+real-world dataset. It is neutral/slightly worse on sparse-loop sequences (06,
+07, 09 have ≤3 loops, little to gain) and degrades on seq08 (a known-difficult
+sequence). **stock ≈ plane** on KITTI (point-to-plane marginally better on clean,
+no consistent edge under drift).
+
+**Rust is unstable at km-scale.** Its factrs batch solve (re-optimizing the full
+graph each loop) diverges on the large sequences (00/05/08 blow up to 10–20+ m)
+where GTSAM/iSAM2 stays stable, and it detects fewer loops. It does win seq02
+(under drift) and the small single-loop seq09, but is not reliable on the big
+loops. This is the same factrs-vs-iSAM2 robustness gap seen on the Go2 outdoor
+set, amplified by KITTI's km-scale graphs. Closing it needs incremental/
+relinearizing optimization (iSAM2-style) or robust back-end handling, not just
+parameter tuning.

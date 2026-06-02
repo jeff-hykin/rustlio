@@ -310,3 +310,46 @@ lever -- logged as the next step. (Loop-search radius and submap resolution also
 still scale with scene; the relocalization-style "estimate base_res from median
 point spacing and scale all distances" would auto-handle those, and is the
 natural companion to this.)
+
+## Finding 10 — fastlio vs Go2 onboard sensor: PGO is only as good as the loops
+
+The outdoor recording carries TWO independent sensor sources (different frames):
+- **fastlio**: `fastlio_odometry` + `fastlio_lidar` (Mid-360, ~15 m range) — the
+  good source. 549 m loop, start->end gap 1.0 m (essentially closed). All prior
+  results use this; PGO corrects injected drift and beats C++.
+- **Go2 onboard**: `odom` (PoseStamped, in the LCM payload not the indexed
+  columns) + `lidar` (short-range ~4.6 m). A worse, independent estimator with
+  REAL drift: the same physical loop comes out 405 m (~26% short) with a 17.3 m
+  start->end gap. Exported via `export_dataset.py --pose-from-payload` to
+  `data/loop_bench/outdoor_small_loop_go2/`; scored by `go2_eval.py` against the
+  fastlio trajectory as groundtruth (rigid + similarity Umeyama alignment).
+
+**Result — no PGO config improves the Go2 trajectory** (raw ATE vs fastlio 12.9 m
+rigid / 7.5 m after removing scale):
+| config | ATE rigid | ATE sim | loop gap |
+|--------|----------:|--------:|---------:|
+| raw (no PGO)            | 12.88 | 7.50 | 17.3 |
+| trust translation       | 23.24 | 23.18 | 59.7 |  (corrupts)
+| distrust translation    | 12.90 | 7.53 | 17.4 |  (no-op)
+| arc-law                 | 14.46 | 10.61 | 24.8 |  (mild corrupt)
+
+**Root causes (the worse sensor exposes all three):**
+1. **Loop *detection* fails under real drift.** Detection is spatial
+   nearest-neighbour in the *drifted* frame. The trajectory end (idx ~773-854)
+   matches idx ~121, NOT the true revisit at the start (idx 0): 17 m of drift
+   moved the real revisit out of range while a different leg fell within it. So
+   the one constraint that would close the 17 m gap is never created; the 77
+   "loops" are mostly local path-proximity pairs. This needs place recognition
+   (Scan Context / descriptors), which this Rust PGO lacks — pure spatial NN is
+   the ceiling.
+2. **Short-range clouds (~4.6 m)** give poor ICP overlap at revisits, so even the
+   loops that form have unreliable translation -> trusting them corrupts.
+3. **~26% scale error** (405 vs 549 m): a systematic odom under-scaling that loop
+   closure cannot redistribute (rigid ATE 12.9 stays even after PGO; the sim ATE
+   7.5 is the non-scale residual).
+
+**Takeaway.** The whole "trust rotation / distrust translation" tuning was on the
+GOOD fastlio source; it cannot manufacture a good loop where detection failed.
+PGO's value is gated by loop *detection + measurement* quality, which is sensor-
+dependent. Making the Go2 source work needs descriptor-based loop detection
+(Scan Context) and is the right next investment — not more back-end noise tuning.

@@ -35,6 +35,7 @@ from scipy.spatial.transform import Rotation
 from dimos.memory2.store.sqlite import SqliteStore
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 
 # --- Go2 front camera (720p) intrinsics, from dimos _camera_info_static() ---
 CAM_W, CAM_H = 1280, 720
@@ -103,6 +104,13 @@ def main() -> None:
         "If empty, each cloud's own .pose is used (hk_village). Otherwise the "
         "nearest-ts pose from this stream is assigned to each cloud.",
     )
+    ap.add_argument(
+        "--pose-from-payload",
+        action="store_true",
+        help="decode the pose-stream PoseStamped payload (o.data.x/y/z + "
+        "orientation) instead of reading the indexed pose_* columns. Needed for "
+        "the Go2 onboard `odom` stream, whose columns are zero placeholders.",
+    )
     args = ap.parse_args()
 
     out = Path(args.out)
@@ -122,7 +130,29 @@ def main() -> None:
         # on the cloud row (hk_village); others leave it zero and carry the
         # trajectory in a separate higher-rate odometry stream matched by ts.
         pose_for_cloud = None
-        if args.pose_stream:
+        if args.pose_stream and args.pose_from_payload:
+            # Go2 `odom`: the pose is in the PoseStamped payload, not the indexed
+            # pose_* columns (which are zero). Decode the payload via dimos.
+            pstream = store.stream(args.pose_stream, PoseStamped).to_list()
+            pts = np.array([o.ts for o in pstream], dtype=np.float64)
+            pposes = np.array(
+                [
+                    [o.data.x, o.data.y, o.data.z,
+                     o.data.orientation.x, o.data.orientation.y,
+                     o.data.orientation.z, o.data.orientation.w]
+                    for o in pstream
+                ],
+                dtype=np.float64,
+            )
+
+            def pose_for_cloud(ts: float):  # noqa: F811
+                j = int(np.searchsorted(pts, ts))
+                j = min(max(j, 0), len(pts) - 1)
+                if j > 0 and abs(pts[j - 1] - ts) < abs(pts[j] - ts):
+                    j -= 1
+                return tuple(pposes[j])
+
+        elif args.pose_stream:
             # The world pose lives on the pose-stream rows (pose_* columns), not
             # on the cloud rows. Read those columns directly via SQL -- avoids
             # decoding the (Odometry) payload and is far faster than iterating.

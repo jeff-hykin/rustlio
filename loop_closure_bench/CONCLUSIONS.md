@@ -499,3 +499,23 @@ worse than raw" bar) and holds KITTI, at a small clean-scene cost.
 stair 0.08 / grass 1.26 vs rust 0.58 / 3.61) or close the go2-outdoor gap (rust+SC
 6.09 vs C++ plane 2.58). That needs better loop-ICP *translation accuracy*
 (PCL-grade registration / coarse-to-fine), the deeper remaining item.
+
+## Finding 15 — registration experiments toward beating C++ (translation accuracy)
+
+Goal: close the gap where rust loop-ICP is good-enough-not-to-corrupt but less
+accurate than PCL (clean stair 0.58 vs C++ 0.08, grass 3.61 vs 1.26, go2-outdoor
+rust+SC 6.09 vs plane 2.58). `scripts/icp_eval.sh` runs the loss + no-regress
+cases as one command.
+
+- **Coarse-to-fine correspondence** (anneal max_dist over iters, `ICP_C2F`): HURTS
+  (stair 0.58->2.0, grass 3.61->5.2). Reverted. Tightening loses inliers on the
+  asymmetric/sparse source submap.
+- **Symmetric point-to-plane** (Rusinkiewicz 2019, unit sum of source+target
+  normals, `ICP_SYM`, default off): net-negative. Helps indoor hk4 (1.06->0.78)
+  and stair (0.58->0.52) but worsens kitti05 (0.034->0.073), grass (3.61->4.20)
+  and the headline go2-outdoor (6.09->7.20). Kept env-gated off.
+
+Two principled objective tweaks both failed to close the go2/grass gaps -> the
+limit may not be the ICP objective but detection (does rust find the true go2
+closure?) and/or the batch backend. Next: GICP (plane-to-plane, per-point
+covariances) and a detection check on go2-outdoor.

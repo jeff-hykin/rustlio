@@ -115,7 +115,10 @@ pub fn point_to_plane(
     let reject_cos = std::env::var("ICP_NORMAL_COS").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0);
     // param-driven Huber delta; ICP_HUBER env overrides for quick experiments
     let huber = std::env::var("ICP_HUBER").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(huber_in);
-    let src_normals: Vec<Vector3<f64>> = if reject_cos > 0.0 {
+    // Symmetric point-to-plane (Rusinkiewicz 2019): use the (unit) sum of source
+    // and target normals -> tighter/more-accurate convergence than one-sided.
+    let sym = std::env::var("ICP_SYM").ok().map_or(false, |v| v != "0");
+    let src_normals: Vec<Vector3<f64>> = if reject_cos > 0.0 || sym {
         let se: Vec<[f64; 3]> = source.iter().map(|p| [p.x, p.y, p.z]).collect();
         let stree: KdTree<f64, 3> = (&se).into();
         estimate_normals(source, &stree, 12)
@@ -147,15 +150,23 @@ pub fn point_to_plane(
                 continue;
             }
             let tgt = target[nn.item as usize];
-            let n = normals[nn.item as usize];
+            let n_t = normals[nn.item as usize];
             // Normal-compatibility rejection: a true surface match has aligned
             // normals; a wrong-surface match (different wall/stair tread) does not.
             if reject_cos > 0.0 {
                 let ns = rot * src_normals[si]; // source normal in current frame
-                if ns.dot(&n).abs() < reject_cos {
+                if ns.dot(&n_t).abs() < reject_cos {
                     continue;
                 }
             }
+            // Symmetric objective: unit sum of source(rotated)+target normals.
+            let n = if sym {
+                let nsum = rot * src_normals[si] + n_t;
+                let l = nsum.norm();
+                if l < 1e-9 { n_t } else { nsum / l }
+            } else {
+                n_t
+            };
             let a = rot * p; // rotated point R*p (= q - trans)
             let r = n.dot(&(q - tgt)); // point-to-plane residual
             // Huber weight: full weight within delta, downweight outliers ~1/|r|.

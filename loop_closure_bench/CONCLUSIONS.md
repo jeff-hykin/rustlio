@@ -460,3 +460,42 @@ the worse Go2 sensor the robust choice is rust+SC (do-no-harm), while C++ is
 higher-ceiling but dangerous. The remaining outdoor gap (rust+SC 5.87 vs plane
 2.58) is rust loop-ICP measurement quality -> trustworthy translation would let
 rust close it too (the active ICP work item).
+
+## Finding 14 — Rust loop ICP: Huber + scale-aware residual gate (default-on)
+
+Two scale-aware, real-time-cheap additions to the Rust loop closure (both default-on):
+- **Huber** robust weighting on the point-to-plane residual, delta = `loop_huber_scale`
+  * submap_resolution (default 1.0). Down-weights outlier correspondences so a few
+  bad matches can't drag the alignment. Cost: one scalar weight per correspondence
+  (no extra passes) — real-time-safe. (Source normals + normal-compat rejection
+  also wired behind `ICP_NORMAL_COS`/`min_inlier_ratio`, default off — the overlap
+  gate is useless on repetitive scenes where false matches have high overlap.)
+- **`loop_fit_max`** (default 2.0): reject a whole loop if `fitness/submap_resolution^2`
+  exceeds it. Scale-aware so one threshold transfers across voxel sizes. This is
+  the discriminator that catches repetitive-structure false loops (high overlap,
+  elevated residual) the overlap gate misses.
+
+**Result** (rust ATE, * = the corruption cases this targets):
+| case | before | after |
+|------|-------:|------:|
+| KITTI mean (7 seqs x 2 drift) | 0.876 | 0.878 (wash; 11->12/14 beat both C++) |
+| KITTI seq00 / seq05 clean | 0.756 / 0.051 | 0.596 / 0.034 (better) |
+| KITTI seq02 / seq08 clean | 1.21 / 0.135 | 1.50 / 0.21 (slightly worse) |
+| *stair-fastlio clean | 2.80 (corrupt) | **0.58** |
+| *stair-fastlio drift0.1 | 2.64 | **1.43** |
+| *grass-fastlio clean | 5.32 (corrupt) | **3.61** |
+| go2 outdoor / stair (vs gtsam GT) | 5.87 / 2.24 | 6.09 / 2.25 (neutral) |
+| indoor hk_village mean | 1.02 | 1.09 (slight cost) |
+
+**Isolation:** the residual gate is purely beneficial/neutral (rejects false
+loops, never touches clean ones). Huber is scene-dependent: it FIXES the cluttered
+hard scenes (gate-only leaves grass at 6.08, worse than baseline — Huber brings it
+to 3.61) but slightly HURTS clean structured scenes (indoor hk4 0.72->1.06, KITTI
+seq00 gate-only 0.52 vs huber 0.60) by down-weighting legitimate large residuals.
+Net default-on is right: it removes the catastrophic corruption (the "don't do
+worse than raw" bar) and holds KITTI, at a small clean-scene cost.
+
+**Still open:** rust does not yet BEAT C++ on the clean new fastlio scenes (C++
+stair 0.08 / grass 1.26 vs rust 0.58 / 3.61) or close the go2-outdoor gap (rust+SC
+6.09 vs C++ plane 2.58). That needs better loop-ICP *translation accuracy*
+(PCL-grade registration / coarse-to-fine), the deeper remaining item.

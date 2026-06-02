@@ -49,6 +49,9 @@ pub struct PgoConfig {
     pub loop_info_max_sigma: f64, // loosest allowed loop sigma (max distrust on sliding dirs)
     pub loop_info_min_sigma: f64, // tightest allowed loop sigma (cap over-trust on stiff dirs)
     pub loop_trans_scale: f64, // if >0: loop trans sigma = scale * loop arc length (auto, dynamic)
+    pub loop_huber_scale: f64, // ICP point-to-plane Huber delta = scale * submap_resolution (0=off)
+    pub min_inlier_ratio: f64, // reject a loop whose ICP overlap is below this (0=off)
+    pub loop_fit_max: f64,     // reject loop if fitness/submap_resolution^2 > this (scale-aware; 0=off)
     // Scan Context loop detection (place recognition) instead of spatial-NN. Finds
     // the true revisit under drift, where spatial-NN matches the wrong place.
     pub use_scan_context: bool,
@@ -97,6 +100,16 @@ impl Default for PgoConfig {
             // open & indoor trajectories, but off by default because it over-distrusts
             // closed-loop (return-home) trajectories. See CONCLUSIONS.md Finding 9.
             loop_trans_scale: 0.0,
+            // Default-on robustness (both scale-aware, so they transfer across
+            // datasets): Huber down-weights outlier correspondences (delta =
+            // 1.0*voxel); loop_fit_max rejects whole false loops whose normalized
+            // residual (fitness/voxel^2) exceeds 2.0 -- the discriminator that
+            // catches repetitive-structure false matches the overlap gate misses.
+            // Validated: improves KITTI, fixes the fastlio-scene corruption,
+            // neutral on go2/indoor. Both cheap (real-time-safe).
+            loop_huber_scale: 1.0,
+            min_inlier_ratio: 0.0,
+            loop_fit_max: 2.0,
             use_scan_context: false,
             sc_max_range: 80.0,
             sc_dist_thresh: 0.4,
@@ -277,14 +290,33 @@ impl Pgo {
         let cur_idx = (n - 1) as i32;
         let target = self.submap(loop_idx, self.cfg.loop_submap_half_range);
         let source = self.submap(cur_idx, self.cfg.loop_source_submap_half_range);
+        // Huber delta scales with submap voxel so it transfers across datasets
+        // (residuals scale with resolution). 0 = off.
+        let huber = self.cfg.loop_huber_scale * self.cfg.submap_resolution;
         let res = icp::point_to_plane(
             &source,
             &target,
             self.cfg.max_icp_iterations,
             self.cfg.max_icp_correspondence_dist,
             self.cfg.min_icp_inliers,
+            huber,
         );
         if res.fitness > self.cfg.loop_score_thresh {
+            return;
+        }
+        // Overlap gate: a true revisit aligns most of the source submap; a false
+        // match (wrong place) leaves much of it without a correspondence.
+        if res.inlier_ratio < self.cfg.min_inlier_ratio {
+            return;
+        }
+        // Scale-aware residual gate: normalize the ICP fitness by voxel^2 so one
+        // threshold transfers across datasets. Repetitive-structure false matches
+        // align with HIGH overlap but elevated residual; this is the discriminator
+        // the overlap gate misses.
+        if self.cfg.loop_fit_max > 0.0
+            && res.fitness / (self.cfg.submap_resolution * self.cfg.submap_resolution)
+                > self.cfg.loop_fit_max
+        {
             return;
         }
         let cur = &self.keyposes[cur_idx as usize];

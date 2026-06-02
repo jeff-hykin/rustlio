@@ -63,6 +63,9 @@ pub struct IcpResult {
     // loop_trans_floor needed. Excludes the point-to-point anchor (a numerical
     // stabilizer, not real information) so sliding is genuinely uninformative.
     pub info: nalgebra::Matrix6<f64>,
+    // Fraction of source points that found an inlier correspondence at convergence
+    // (Open3D-style overlap). Low ratio = poor overlap = likely a false loop.
+    pub inlier_ratio: f64,
 }
 
 /// Align `source` to `target` (both already in a common world frame, init =
@@ -74,11 +77,13 @@ pub fn point_to_plane(
     max_iter: usize,
     max_dist: f64,
     min_inliers: usize,
+    huber_in: f64, // Huber delta (m) on the point-to-plane residual; 0 = off
 ) -> IcpResult {
     let reject = IcpResult {
         transform: Isometry3::identity(),
         fitness: f64::INFINITY,
         info: nalgebra::Matrix6::zeros(),
+        inlier_ratio: 0.0,
     };
     if source.len() < min_inliers || target.len() < min_inliers {
         return reject;
@@ -101,11 +106,29 @@ pub fn point_to_plane(
     let tree: KdTree<f64, 3> = (&entries).into();
     let normals = estimate_normals(target, &tree, 12);
 
+    // PCL-style correspondence rejection (env-tunable for A/B):
+    //   ICP_NORMAL_COS=c  reject a pair whose source/target normals disagree
+    //                     (|n_s·n_t| < c) -- kills wrong-surface matches that
+    //                     pass the distance gate and corrupt loops.
+    //   ICP_HUBER=d       Huber-weight the point-to-plane residual at delta d (m)
+    //                     so a few outlier correspondences can't dominate.
+    let reject_cos = std::env::var("ICP_NORMAL_COS").ok().and_then(|v| v.parse().ok()).unwrap_or(0.0);
+    // param-driven Huber delta; ICP_HUBER env overrides for quick experiments
+    let huber = std::env::var("ICP_HUBER").ok().and_then(|v| v.parse::<f64>().ok()).unwrap_or(huber_in);
+    let src_normals: Vec<Vector3<f64>> = if reject_cos > 0.0 {
+        let se: Vec<[f64; 3]> = source.iter().map(|p| [p.x, p.y, p.z]).collect();
+        let stree: KdTree<f64, 3> = (&se).into();
+        estimate_normals(source, &stree, 12)
+    } else {
+        Vec::new()
+    };
+
     let max_d2 = max_dist * max_dist;
     let w_p2p = p2p_weight();
     let mut rot = Matrix3::identity();
     let mut trans = Vector3::zeros();
     let mut last_fitness = f64::INFINITY;
+    let mut last_ratio = 0.0;
     let mut last_info = nalgebra::Matrix6::<f64>::zeros();
     let log = std::env::var("ICP_LOG").is_ok();
 
@@ -117,7 +140,7 @@ pub fn point_to_plane(
         let mut p2pl_sum = 0.0;
         let mut inliers = 0usize;
 
-        for p in source {
+        for (si, p) in source.iter().enumerate() {
             let q = rot * p + trans;
             let nn = tree.nearest_one::<SquaredEuclidean>(&[q.x, q.y, q.z]);
             if nn.distance > max_d2 {
@@ -125,16 +148,26 @@ pub fn point_to_plane(
             }
             let tgt = target[nn.item as usize];
             let n = normals[nn.item as usize];
+            // Normal-compatibility rejection: a true surface match has aligned
+            // normals; a wrong-surface match (different wall/stair tread) does not.
+            if reject_cos > 0.0 {
+                let ns = rot * src_normals[si]; // source normal in current frame
+                if ns.dot(&n).abs() < reject_cos {
+                    continue;
+                }
+            }
             let a = rot * p; // rotated point R*p (= q - trans)
             let r = n.dot(&(q - tgt)); // point-to-plane residual
+            // Huber weight: full weight within delta, downweight outliers ~1/|r|.
+            let w = if huber > 0.0 && r.abs() > huber { huber / r.abs() } else { 1.0 };
             // J = [ (a x n)^T , n^T ]  (rotation first, then translation)
             let jrot = a.cross(&n);
             let mut j = nalgebra::Vector6::<f64>::zeros();
             j.fixed_rows_mut::<3>(0).copy_from(&jrot);
             j.fixed_rows_mut::<3>(3).copy_from(&n);
-            h += j * j.transpose();
-            h_plane += j * j.transpose();
-            g += j * r;
+            h += w * j * j.transpose();
+            h_plane += w * j * j.transpose();
+            g += w * j * r;
             // Small point-to-point anchor. Plane-only ICP can slide freely in a
             // wall plane (zero plane cost); the point-to-point term's minimum on
             // aligned data IS identity, so a light weight pins the slide without
@@ -143,8 +176,8 @@ pub fn point_to_plane(
             let mut j3 = nalgebra::Matrix3x6::<f64>::zeros();
             j3.fixed_columns_mut::<3>(0).copy_from(&(-skew(&a)));
             j3.fixed_columns_mut::<3>(3).copy_from(&Matrix3::identity());
-            h += w_p2p * j3.transpose() * j3;
-            g += w_p2p * j3.transpose() * e;
+            h += w * w_p2p * j3.transpose() * j3;
+            g += w * w_p2p * j3.transpose() * e;
             sq_sum += nn.distance; // squared point-to-point distance
             p2pl_sum += r * r; // squared point-to-plane residual
             inliers += 1;
@@ -189,6 +222,7 @@ pub fn point_to_plane(
         }
 
         last_fitness = fitness;
+        last_ratio = inliers as f64 / source.len() as f64;
         // Converge on a small step (transformation epsilon), like PCL. This
         // stops the slow in-plane crawl early instead of running all iterations.
         if dtrans.norm() < 1e-3 && drot.norm() < 1e-3 {
@@ -201,5 +235,6 @@ pub fn point_to_plane(
         transform: Isometry3::from_parts(Translation3::from(trans), rotation.into()),
         fitness: last_fitness,
         info: last_info,
+        inlier_ratio: last_ratio,
     }
 }

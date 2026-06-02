@@ -50,7 +50,7 @@ fn main() {
     if args.len() >= 4 && args[1] == "--icp-test" {
         let src = load_xyz(&args[2]);
         let tgt = load_xyz(&args[3]);
-        let r = icp::point_to_plane(&src, &tgt, 50, 1.0, 10);
+        let r = icp::point_to_plane(&src, &tgt, 50, 1.0, 10, 0.0);
         let t = r.transform.translation.vector;
         println!(
             "rust_icp: |t|={:.4} t=[{:.4},{:.4},{:.4}] fitness={:.5}",
@@ -110,6 +110,9 @@ fn main() {
     cfg.loop_info_max_sigma = getd("loop_info_max_sigma", cfg.loop_info_max_sigma);
     cfg.loop_info_min_sigma = getd("loop_info_min_sigma", cfg.loop_info_min_sigma);
     cfg.loop_trans_scale = getd("loop_trans_scale", cfg.loop_trans_scale);
+    cfg.loop_huber_scale = getd("loop_huber_scale", cfg.loop_huber_scale);
+    cfg.min_inlier_ratio = getd("min_inlier_ratio", cfg.min_inlier_ratio);
+    cfg.loop_fit_max = getd("loop_fit_max", cfg.loop_fit_max);
     cfg.use_scan_context = geti("use_scan_context", cfg.use_scan_context as i32) != 0;
     cfg.sc_max_range = getd("sc_max_range", cfg.sc_max_range);
     cfg.sc_dist_thresh = getd("sc_dist_thresh", cfg.sc_dist_thresh);

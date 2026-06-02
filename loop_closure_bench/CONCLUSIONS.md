@@ -324,32 +324,42 @@ The outdoor recording carries TWO independent sensor sources (different frames):
   `data/loop_bench/outdoor_small_loop_go2/`; scored by `go2_eval.py` against the
   fastlio trajectory as groundtruth (rigid + similarity Umeyama alignment).
 
-**Result — no PGO config improves the Go2 trajectory** (raw ATE vs fastlio 12.9 m
-rigid / 7.5 m after removing scale):
-| config | ATE rigid | ATE sim | loop gap |
-|--------|----------:|--------:|---------:|
-| raw (no PGO)            | 12.88 | 7.50 | 17.3 |
-| trust translation       | 23.24 | 23.18 | 59.7 |  (corrupts)
-| distrust translation    | 12.90 | 7.53 | 17.4 |  (no-op)
-| arc-law                 | 14.46 | 10.61 | 24.8 |  (mild corrupt)
+**Result** (raw ATE vs fastlio 12.9 m rigid / 7.5 m after removing the ~26%
+scale error; loop gap is the trajectory's own start->end distance — a clean
+"did the loop close" signal). go2 config: key_pose_delta_trans 1, search radius
+20 (to bridge the 17 m drift), corr 2, submap_half 15, voxel 0.2.
+| config | ATE rigid | ATE sim | loop gap | verdict |
+|--------|----------:|--------:|---------:|---------|
+| raw (no PGO)         | 12.88 | 7.50 | 17.3 | — |
+| stock (C++ p2p)      | 35.67 | 34.81 | 99.0 | corrupts |
+| gated (C++ +reject)  | 36.01 | 35.25 | 97.2 | corrupts |
+| **plane (C++ p2plane)** | 11.88 | **2.02** | **0.75** | **closes the loop** |
+| rust (distrust)      | 12.98 |  7.90 | 18.2 | no-op |
+| rust (trust)         | 23.24 | 23.18 | 59.7 | corrupts |
 
-**Root causes (the worse sensor exposes all three):**
-1. **Loop *detection* fails under real drift.** Detection is spatial
-   nearest-neighbour in the *drifted* frame. The trajectory end (idx ~773-854)
-   matches idx ~121, NOT the true revisit at the start (idx 0): 17 m of drift
-   moved the real revisit out of range while a different leg fell within it. So
-   the one constraint that would close the 17 m gap is never created; the 77
-   "loops" are mostly local path-proximity pairs. This needs place recognition
-   (Scan Context / descriptors), which this Rust PGO lacks — pure spatial NN is
-   the ceiling.
-2. **Short-range clouds (~4.6 m)** give poor ICP overlap at revisits, so even the
-   loops that form have unreliable translation -> trusting them corrupts.
-3. **~26% scale error** (405 vs 549 m): a systematic odom under-scaling that loop
-   closure cannot redistribute (rigid ATE 12.9 stays even after PGO; the sim ATE
-   7.5 is the non-scale residual).
+**Corrected takeaway** (an earlier draft wrongly concluded "no PGO helps Go2" — it
+had only run rust + C++ stock). **The C++ point-to-plane PGO DOES work on the Go2
+sensor**: it finds the true end->start closure and pulls the 17.3 m gap to 0.75 m,
+cutting the scale-aligned ATE 7.5 -> 2.0 m. **The Rust port does not** — opposite
+of KITTI/indoor, where Rust wins. Why the Rust port loses on this hard source:
 
-**Takeaway.** The whole "trust rotation / distrust translation" tuning was on the
-GOOD fastlio source; it cannot manufacture a good loop where detection failed.
-PGO's value is gated by loop *detection + measurement* quality, which is sensor-
-dependent. Making the Go2 source work needs descriptor-based loop detection
-(Scan Context) and is the right next investment — not more back-end noise tuning.
+1. **Loop *detection*.** Both detectors are spatial-NN in the drifted frame, but
+   C++ SimplePGO's end keyframes (785,798,830,861) connect to the START region
+   (tgt 11-52) — the real revisit — while the Rust detector's end keyframes match
+   tgt ~121 (a different leg that fell nearer in the drifted frame). C++ evidently
+   validates candidates by ICP fit / considers several; Rust commits to the single
+   nearest. So Rust never forms the constraint that closes the gap.
+2. **Loop *measurement*.** C++ uses PCL point-to-plane (`...WithNormals`) + iSAM2
+   and its loops are good enough to TRUST (decoupled noise) and still close; the
+   Rust point-to-plane loops corrupt when trusted (the short ~4.6 m range gives
+   poor overlap), so Rust must distrust -> can't pull the gap.
+3. **~26% scale error** (405 vs 549 m) is unfixable by loop closure for any of
+   them; it stays in the rigid ATE (~12 m) — only the sim ATE reflects what PGO
+   can actually correct.
+
+**So the Go2 source is the case that justifies the next two investments:**
+descriptor-based loop **detection** (Scan Context — find the real revisit under
+drift instead of the spatial-nearest) and better Rust loop **measurement**
+(multi-candidate ICP validation, matching what C++ does). The trust/distrust
+back-end tuning was all on the good fastlio source and cannot manufacture a good
+loop where detection/measurement fail.

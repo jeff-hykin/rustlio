@@ -17,7 +17,8 @@ import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO = os.path.dirname(ROOT)
-HARNESS = f"{ROOT}/rust/target/release/pgo_bench_rs"
+HARNESS_RUST = f"{ROOT}/rust/target/release/pgo_bench_rs"
+HARNESS_CPP = f"{ROOT}/harness/build/pgo_bench"
 GO2 = f"{REPO}/data/loop_bench/outdoor_small_loop_go2"
 GT = f"{REPO}/data/loop_bench/outdoor_small_loop/lidar_poses.tum"  # fastlio = groundtruth
 
@@ -56,9 +57,20 @@ def main():
     extra = [a for a in sys.argv[1:] if "=" in a]
     gts, gtx = read_tum(GT)
 
+    # backend=rust -> rust harness; otherwise the C++ harness (impl=plane selects
+    # the point-to-plane C++ port). Mirrors run_bench.py's harness switch.
+    backend = "cpp"
+    passthru = []
+    for a in extra:
+        if a.startswith("backend="):
+            backend = a.split("=", 1)[1]
+        else:
+            passthru.append(a)
+    harness = HARNESS_RUST if backend == "rust" else HARNESS_CPP
+
     out = tempfile.mktemp(suffix=".json")
-    cmd = [HARNESS, "--clouds", f"{GO2}/clouds.bin", "--poses", f"{GO2}/lidar_poses.tum",
-           "--out", out, *extra]
+    cmd = [harness, "--clouds", f"{GO2}/clouds.bin", "--poses", f"{GO2}/lidar_poses.tum",
+           "--out", out, *passthru]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         print("FAILED:", r.stderr[-400:]); sys.exit(1)

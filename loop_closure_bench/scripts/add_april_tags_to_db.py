@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 """Detect AprilTags in a mem2.db's color_image stream and write them back as an
-`apriltags` PoseStamped stream of RELATIVE poses (tag-in-camera, from solvePnP),
+`april_tags` PoseStamped stream of RELATIVE poses (tag-in-camera, from solvePnP),
 with marker_id in each observation's tags. Also dumps markers.json + meta.json for
 the gtsam_odom solve. Run in the dimos env (needs cv2 + dimos).
 
-    cd ~/repos/dimos3 && uv run --no-sync python add_apriltags_to_db.py \
+    cd ~/repos/dimos3 && uv run --no-sync python add_april_tags_to_db.py \
         --db <mem2.db> --markers-out <markers.json> --meta-out <meta.json>
 """
 import argparse, json
@@ -27,7 +27,7 @@ def main():
     ap.add_argument("--markers-out", required=True)
     ap.add_argument("--meta-out", required=True)
     ap.add_argument("--image-stream", default="color_image")
-    ap.add_argument("--stream-name", default="apriltags")
+    ap.add_argument("--stream-name", default="april_tags")
     ap.add_argument("--marker-length", type=float, default=0.10)
     ap.add_argument("--dictionary", default="DICT_APRILTAG_36h11")
     args = ap.parse_args()
@@ -61,7 +61,7 @@ def main():
     json.dump(markers, open(args.markers_out, "w"))
     json.dump({"base_to_optical": BASE_TO_OPTICAL_7}, open(args.meta_out, "w"))
     ids = sorted({m["marker_id"] for m in markers})
-    print(f"[apriltags] {len(markers)} detections, markers {ids} -> stream '{args.stream_name}' + {args.markers_out}")
+    print(f"[april_tags] {len(markers)} detections, markers {ids} -> stream '{args.stream_name}' + {args.markers_out}")
 
 
 if __name__ == "__main__":

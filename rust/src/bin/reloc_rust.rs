@@ -16,7 +16,7 @@
 // TRIALS.txt  "scan_idx tx ty tz qx qy qz qw"       (guess IGNORED; global)
 // RESULTS.txt "converged tx ty tz qx qy qz qw time_ms"  (converged = fitness gate)
 //
-// cfg: ransac_iters, restarts_fine, restarts_coarse, accept_fitness.
+// cfg: ransac_iters, restarts_fine, restarts_coarse, accept_fitness, base_res.
 
 use nalgebra::{Matrix3, Matrix4, Vector3};
 use rayon::prelude::*;
@@ -26,8 +26,11 @@ use std::time::Instant;
 type V3 = Vector3<f64>;
 type M4 = Matrix4<f64>;
 
-const FINE_VOXEL: f64 = 0.1;
-const RERANK_DIST: f64 = FINE_VOXEL * 1.5;
+// Density-adaptive: all distances scale with `base_res` (cfg, default 0.1 m =
+// indoor/Livox). Set base_res to the prior map's point spacing (e.g. 0.5 for
+// KITTI automotive LiDAR) so FINE_VOXEL, RERANK_DIST and the FPFH scale plan
+// track the data density. base_res=0.1 reproduces the original indoor params.
+const DEFAULT_BASE_RES: f64 = -1.0; // <0 = auto-estimate from map spacing
 const GRAVITY_TILT_MAX_DEG: f64 = 10.0;
 const TOP_K: usize = 10;
 const NB: usize = 11; // bins per FPFH sub-feature (3 * 11 = 33)
@@ -91,6 +94,32 @@ impl KdTree {
         self.nearest_rec(near, q, best);
         if diff * diff < best.1 {
             self.nearest_rec(far, q, best);
+        }
+    }
+    // nearest neighbour distance excluding a given index (for spacing estimation)
+    fn nearest_skip(&self, q: &V3, skip: usize) -> f64 {
+        let mut best = f64::MAX;
+        self.nearest_skip_rec(self.root, q, skip, &mut best);
+        best
+    }
+    fn nearest_skip_rec(&self, node: i32, q: &V3, skip: usize, best: &mut f64) {
+        if node < 0 {
+            return;
+        }
+        let nd = &self.nodes[node as usize];
+        let p = &self.pts[nd.idx];
+        if nd.idx != skip {
+            let d2 = (p - q).norm_squared();
+            if d2 < *best {
+                *best = d2;
+            }
+        }
+        let a = nd.axis as usize;
+        let diff = q[a] - p[a];
+        let (near, far) = if diff < 0.0 { (nd.left, nd.right) } else { (nd.right, nd.left) };
+        self.nearest_skip_rec(near, q, skip, best);
+        if diff * diff < *best {
+            self.nearest_skip_rec(far, q, skip, best);
         }
     }
     fn within(&self, q: &V3, r: f64, out: &mut Vec<usize>) {
@@ -506,6 +535,8 @@ struct ScaleData {
 }
 struct Target {
     scales: Vec<(f64, usize)>,
+    fine_voxel: f64,
+    rerank: f64,
     sdata: Vec<ScaleData>,
     fine: Vec<V3>,
     fine_n: Vec<V3>,
@@ -539,24 +570,44 @@ fn preprocess(pts: &[V3], vs: f64) -> (Vec<V3>, Vec<V3>, KdTree, Vec<[f32; 33]>)
     (down, normals, tree, fpfh)
 }
 
-fn build_target(map: &[V3], scales: Vec<(f64, usize)>) -> Target {
+// Estimate the map's point spacing (median nearest-neighbour distance over a
+// sample). Used to auto-set base_res so the pipeline adapts to sensor density.
+fn estimate_spacing(pts: &[V3]) -> f64 {
+    if pts.len() < 10 {
+        return 0.1;
+    }
+    let tree = KdTree::build(pts.to_vec());
+    let step = (pts.len() / 3000).max(1);
+    let mut ds: Vec<f64> = (0..pts.len())
+        .step_by(step)
+        .map(|i| tree.nearest_skip(&pts[i], i).sqrt())
+        .filter(|d| d.is_finite() && *d > 1e-6)
+        .collect();
+    if ds.is_empty() {
+        return 0.1;
+    }
+    ds.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    ds[ds.len() / 2]
+}
+
+fn build_target(map: &[V3], scales: Vec<(f64, usize)>, fine_voxel: f64, rerank: f64) -> Target {
     let mut sdata = Vec::new();
     for &(vs, _) in &scales {
         let (down, _n, tree, fpfh) = preprocess(map, vs);
         sdata.push(ScaleData { down, fpfh, tree });
     }
-    let fine = voxel_downsample(map, FINE_VOXEL);
+    let fine = voxel_downsample(map, fine_voxel);
     let fine_tree = KdTree::build(fine.clone());
-    let fine_n = estimate_normals(&fine, &fine_tree, FINE_VOXEL * 2.0);
+    let fine_n = estimate_normals(&fine, &fine_tree, fine_voxel * 2.0);
     let (wall, wall_n) = wall_subset(&fine, &fine_n);
     let wall_tree = KdTree::build(wall.clone());
-    Target { scales, sdata, fine, fine_n, fine_tree, wall, wall_n, wall_tree }
+    Target { scales, fine_voxel, rerank, sdata, fine, fine_n, fine_tree, wall, wall_n, wall_tree }
 }
 
 fn relocalize(local: &[V3], tc: &Target, ransac_iters: usize, seed: u64) -> (M4, f64) {
-    let src_fine = voxel_downsample(local, FINE_VOXEL);
+    let src_fine = voxel_downsample(local, tc.fine_voxel);
     let src_fine_tree = KdTree::build(src_fine.clone());
-    let src_fine_n = estimate_normals(&src_fine, &src_fine_tree, FINE_VOXEL * 2.0);
+    let src_fine_n = estimate_normals(&src_fine, &src_fine_tree, tc.fine_voxel * 2.0);
     let (src_wall, src_wall_n) = wall_subset(&src_fine, &src_fine_n);
 
     let mut candidates: Vec<M4> = Vec::new();
@@ -601,7 +652,7 @@ fn relocalize(local: &[V3], tc: &Target, ransac_iters: usize, seed: u64) -> (M4,
 
     // rerank by wall-only fine fitness, top-K
     let mut scored: Vec<(f64, M4)> =
-        pool.iter().map(|t| (inlier_fitness(&src_wall, &tc.wall_tree, t, RERANK_DIST), *t)).collect();
+        pool.iter().map(|t| (inlier_fitness(&src_wall, &tc.wall_tree, t, tc.rerank), *t)).collect();
     scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
     scored.truncate(TOP_K);
 
@@ -609,8 +660,8 @@ fn relocalize(local: &[V3], tc: &Target, ransac_iters: usize, seed: u64) -> (M4,
     let mut best_fit = -1.0;
     let mut best_t = M4::identity();
     for (_, t0) in &scored {
-        let t = point_to_plane_icp(&src_wall, &tc.wall, &tc.wall_n, &tc.wall_tree, t0, RERANK_DIST, 70);
-        let fit = inlier_fitness(&src_wall, &tc.wall_tree, &t, RERANK_DIST);
+        let t = point_to_plane_icp(&src_wall, &tc.wall, &tc.wall_n, &tc.wall_tree, t0, tc.rerank, 70);
+        let fit = inlier_fitness(&src_wall, &tc.wall_tree, &t, tc.rerank);
         if fit > best_fit {
             best_fit = fit;
             best_t = t;
@@ -618,7 +669,7 @@ fn relocalize(local: &[V3], tc: &Target, ransac_iters: usize, seed: u64) -> (M4,
     }
 
     // final ICP on full fine clouds
-    let final_t = point_to_plane_icp(&src_fine, &tc.fine, &tc.fine_n, &tc.fine_tree, &best_t, RERANK_DIST, 50);
+    let final_t = point_to_plane_icp(&src_fine, &tc.fine, &tc.fine_n, &tc.fine_tree, &best_t, tc.rerank, 50);
     (final_t, best_fit)
 }
 
@@ -690,6 +741,7 @@ fn main() {
     let mut restarts_fine = 8usize;
     let mut restarts_coarse = 1usize;
     let mut accept_fitness = 0.15f64;
+    let mut base_res = DEFAULT_BASE_RES;
     let mut i = 1;
     while i < args.len() {
         let a = &args[i];
@@ -709,6 +761,7 @@ fn main() {
                         "restarts_fine" => restarts_fine = v.parse().unwrap(),
                         "restarts_coarse" => restarts_coarse = v.parse().unwrap(),
                         "accept_fitness" => accept_fitness = v.parse().unwrap(),
+                        "base_res" => base_res = v.parse().unwrap(),
                         _ => {}
                     }
                 }
@@ -724,10 +777,24 @@ fn main() {
     let map_pts = read_pcd_binary(&map);
     eprintln!("[reloc_rust] building target from {} map points...", map_pts.len());
     let tb = Instant::now();
-    let scales = vec![(0.2, restarts_fine), (0.3, restarts_fine), (0.8, restarts_coarse)];
-    let tc = build_target(&map_pts, scales);
+    // Auto-estimate base_res from the map's point spacing unless overridden.
+    if base_res <= 0.0 {
+        base_res = estimate_spacing(&map_pts).clamp(0.05, 1.0);
+        eprintln!("[reloc_rust] auto base_res = {:.3} (map spacing)", base_res);
+    }
+    // Density-adaptive scale plan / distances, all proportional to base_res
+    // (0.1 -> original indoor 0.2/0.3/0.8 & fine 0.1; 0.5 -> 1.0/1.5/4.0 & fine 0.5).
+    let fine_voxel = base_res;
+    let rerank = base_res * 1.5;
+    let scales = vec![
+        (base_res * 2.0, restarts_fine),
+        (base_res * 3.0, restarts_fine),
+        (base_res * 8.0, restarts_coarse),
+    ];
+    let tc = build_target(&map_pts, scales, fine_voxel, rerank);
     eprintln!(
-        "[reloc_rust] target ready (fine={} walls={}) in {:.2}s",
+        "[reloc_rust] base_res={} target ready (fine={} walls={}) in {:.2}s",
+        base_res,
         tc.fine.len(),
         tc.wall.len(),
         tb.elapsed().as_secs_f64()

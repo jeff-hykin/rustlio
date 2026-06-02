@@ -18,12 +18,24 @@ result JSONs under `<name>/reloc_results/`.
 | go2_5_32pm | 0% | 3% | **9%** |
 | go2_6_05pm | 0% | 69% | **84%** (te_med 2 cm) |
 
-**Rust outperforms both on both recordings.** 6:05pm is a compact scene and
-relocalizes well (84%). 5:32pm is a large, 3D, sprawling scene (149×184×13 m,
-729 m path) — genuinely hard for *all* global methods (stock 0%, C++ 3%, Rust
-9%); maps are coherent (consecutive-frame overlap 0.09 m), so the low numbers
-are scene difficulty, not a data bug. stock ICP can't do no-guess global
-relocalization (0% — it needs a near-truth guess).
+**Rust outperforms both on both recordings.** 6:05pm relocalizes well (84%).
+5:32pm is low (9%) for two distinct reasons:
+
+1. **Odometry drift corrupts the prior map (fixable).** The onboard FAST-LIO
+   drifted on this recording: pose z climbs 0→13 m (ground robot, should be
+   flat), and the SAME AprilTag lands far apart across visits — marker 18
+   (trashcan) 9.6 m, marker 21 (ledge) 9.4 m. So the raw-odometry-stitched map
+   is smeared: each landmark exists in ~two places ~10 m apart, the revisited
+   passes don't align, and relocalization can't lock onto the structured
+   trashcan/ledge regions. (NB: consecutive-frame overlap is 0.09 m but that
+   only checks adjacent frames — it does NOT detect loop/revisit drift.)
+   Fix: build the prior map from a loop-closed / PGO-corrected trajectory.
+2. **The grass field is genuinely unrelocalizable** — featureless field
+   crossings have no geometry to register against (expected to fail).
+
+6:05pm drifts far less (marker 21 spread 3.7 m across 3 visits, flat z) → 84%.
+stock ICP can't do no-guess global relocalization (0% — it needs a near-truth
+guess).
 
 Rust uses the density-adaptive pipeline (auto base_res ≈ map spacing); see
 `three_dataset_comparison.md` for the technique.

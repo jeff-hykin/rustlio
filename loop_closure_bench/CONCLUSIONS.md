@@ -400,3 +400,40 @@ Go2 sensor, where the limits are descriptor range and Rust ICP quality, not the
 detector choice. Next: improve the Rust loop ICP (match PCL point-to-plane /
 multi-candidate validation) so found loops can be trusted; and SC++ augmentation
 (intensity / multi-resolution descriptors) for short-range distinctiveness.
+
+## Finding 12 — two new Go2 scenes (grass_field_loop, stair_plaza), fastlio + go2
+
+Added two 2026-06-01 recordings (relocalizer pre-exported the fastlio source to
+`~/datasets/go2_recordings/`; symlinked as `grass_field_loop` (5:32pm, sprawling
+149x184x13 m, fastlio path 729 m / gap 174 m — barely a loop) and `stair_plaza`
+(6:05pm, compact, 598 m / gap 20 m)). Go2 source exported with
+`export_dataset.py --pose-from-payload`. 4 cases = 2 scenes x (fastlio injected
+drift, ATE vs clean | go2 real drift, sim-ATE vs fastlio GT via go2_eval.py).
+
+**fastlio (injected drift), ATE clean->pgo:**
+| case | stock | plane | rust(best) |
+|------|------:|------:|-----------:|
+| grass yaw0    | 1.26 | 1.42 | 5.32 (arc) — all corrupt a featureless scene |
+| grass yaw0.1  | 5.86 | 5.11 | 12.5 |
+| stair yaw0    | **0.08** | **0.10** | 2.80 (arc) — rust corrupts |
+| stair yaw0.1  | **0.86** | **0.94** | 2.64 |
+
+**go2 (real drift), sim-ATE raw->pgo:**
+| case | raw | stock | plane | rust | rust+SC |
+|------|----:|------:|------:|-----:|--------:|
+| grass go2 | 53.75 | 55.1 | 51.9 | 53.9 | 53.9 | (unsolvable: both sensors drift huge; no reliable GT) |
+| stair go2 | 1.97 | 8.29 | 14.40 | **1.84** | **1.87** | (rust = do-no-harm; C++ CORRUPTS) |
+
+**Two opposite failures, one root cause.** On the **fastlio** scenes the Rust loop
+ICP produces bad loops (78 vs C++'s 45) and CORRUPTS where C++ stays clean
+(stair 0.08); no back-end noise config (rot 0.001/0.05, arc-law, SC) avoids it.
+On the **go2** scenes the C++ point-to-plane CORRUPTS stair (8-14 m) while Rust's
+distrust-translation does no harm (1.84). So neither stack universally meets
+"don't do worse than raw" — and the shared culprit is **loop ICP/measurement
+quality on hard scenes**, exactly the next work item. grass is genuinely
+unsolvable (no reliable GT); all methods ~no-op there, none catastrophic for go2.
+(`rot_var=0.001` was overfit to outdoor_small_loop; it's not a safe default.)
+
+**Priority confirmed:** improve the Rust loop ICP (PCL-grade point-to-plane /
+multi-candidate validation) so loops are trustworthy — that is what gates both
+the corruption on fastlio scenes and the inability to close loops on go2.

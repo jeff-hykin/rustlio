@@ -19,6 +19,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPO = os.path.dirname(ROOT)
 HARNESS_RUST = f"{ROOT}/rust/target/release/pgo_bench_rs"
 HARNESS_CPP = f"{ROOT}/harness/build/pgo_bench"
+# Defaults; override with --go2 <dir> and --gt <fastlio lidar_poses.tum>.
 GO2 = f"{REPO}/data/loop_bench/outdoor_small_loop_go2"
 GT = f"{REPO}/data/loop_bench/outdoor_small_loop/lidar_poses.tum"  # fastlio = groundtruth
 
@@ -54,8 +55,18 @@ def ate(src, dst, with_scale):
 
 
 def main():
-    extra = [a for a in sys.argv[1:] if "=" in a]
-    gts, gtx = read_tum(GT)
+    args = sys.argv[1:]
+    go2_dir, gt_path = GO2, GT
+    i = 0
+    while i < len(args):
+        if args[i] == "--go2":
+            go2_dir = args[i + 1]; i += 2
+        elif args[i] == "--gt":
+            gt_path = args[i + 1]; i += 2
+        else:
+            i += 1
+    extra = [a for a in args if "=" in a]
+    gts, gtx = read_tum(gt_path)
 
     # backend=rust -> rust harness; otherwise the C++ harness (impl=plane selects
     # the point-to-plane C++ port). Mirrors run_bench.py's harness switch.
@@ -69,7 +80,7 @@ def main():
     harness = HARNESS_RUST if backend == "rust" else HARNESS_CPP
 
     out = tempfile.mktemp(suffix=".json")
-    cmd = [harness, "--clouds", f"{GO2}/clouds.bin", "--poses", f"{GO2}/lidar_poses.tum",
+    cmd = [harness, "--clouds", f"{go2_dir}/clouds.bin", "--poses", f"{go2_dir}/lidar_poses.tum",
            "--out", out, *passthru]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:

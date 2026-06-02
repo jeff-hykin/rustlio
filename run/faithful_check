@@ -25,10 +25,16 @@ REC="/Volumes/USB/fastlio_recordings/recording_go2_mid360_2026-05-28_7-37pm-PST"
 PCAP="$REC.pcap"
 DB="${REC}_with_imu.db"
 CONFIG="config_examples/mid360.yaml"
-OUT="logs.ignore/faithful"
+OUT_BASE="logs.ignore/faithful"
 MARGIN=8           # seconds to convert/run past the divergence cutoff
-JUMP=0.3           # upstream single-step jump (m) that marks divergence
+# Divergence = a single odom step jumping farther than the robot can physically
+# move in one ~0.1 s frame. 0.5 m/frame ≈ 5 m/s, safely above the Go2's ~3.1 m/s
+# cap, so brisk-but-valid motion (which can hit ~3 m/s = 0.3 m/frame) is NOT
+# flagged, while a real teleport divergence (which blows past tens of m/s)
+# still is. 0.3 m here false-flagged a valid fast walk.
+JUMP=0.5           # upstream single-step jump (m) that marks divergence
 TOL=0.5            # 3D aligned-RMSE PASS threshold (m)
+MAXSEC=0           # 0 = run to divergence cutoff; else hard cap (s)
 REBUILD=0
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -37,6 +43,7 @@ while [ $# -gt 0 ]; do
         --margin) MARGIN="$2"; shift ;;
         --jump-thresh) JUMP="$2"; shift ;;
         --tol|--tolerance) TOL="$2"; shift ;;
+        --max-seconds) MAXSEC="$2"; shift ;;
         --rebuild) REBUILD=1 ;;
         -h|--help) sed -n '2,8p' "$0"; exit 0 ;;
         *) echo "unknown arg: $1" >&2; exit 2 ;;
@@ -44,7 +51,13 @@ while [ $# -gt 0 ]; do
     shift
 done
 
+# Per-recording output dir so different recordings never reuse each other's
+# cached artifacts (the cache key includes the recording, not just duration).
+TAG="$(basename "$(dirname "$PCAP")")_$(basename "$PCAP" .pcap)"
+TAG="$(printf '%s' "$TAG" | tr -c 'A-Za-z0-9._-' '_')"
+OUT="$OUT_BASE/$TAG"
 mkdir -p "$OUT"
+echo "recording tag: $TAG"
 [ -f "$PCAP" ] || { echo "pcap not found: $PCAP  (is the USB drive mounted?)"; exit 1; }
 [ -f "$DB" ]   || { echo "db not found: $DB  (is the USB drive mounted?)"; exit 1; }
 
@@ -71,12 +84,19 @@ CUT=$("$PY" - "$UP" "$JUMP" <<'PYEOF'
 import sys, numpy as np
 up = np.load(sys.argv[1]); thr = float(sys.argv[2])
 t = up[:,0]-up[0,0]; j = np.linalg.norm(np.diff(up[:,1:4],axis=0),axis=1)
-d = np.where(j>thr)[0]
-print(f"{(t[d[0]+1] if len(d) else t[-1]):.2f}")
+# sustained divergence: rolling-median jump over ~1 s exceeds thr (ignores
+# isolated single-frame timestamp-jitter spikes). Matches compare.py.
+w = max(1, int(round(len(t) / max(t[-1], 1e-6))))
+med = np.array([np.median(j[i:i+w]) for i in range(len(j))])
+d = np.where(med > thr)[0]
+print(f"{(t[d[0]] if len(d) else t[-1]):.2f}")
 PYEOF
 )
-DUR=$("$PY" -c "print(f'{$CUT + $MARGIN:.1f}')")
-echo "divergence cutoff ${CUT}s -> converting/running ${DUR}s (cutoff + ${MARGIN}s margin)"
+DUR=$("$PY" -c "
+cut=$CUT + $MARGIN
+cap=$MAXSEC
+print(f'{min(cut,cap) if cap>0 else cut:.1f}')")
+echo "divergence cutoff ${CUT}s -> converting/running ${DUR}s (cutoff + ${MARGIN}s margin${MAXSEC:+, capped at ${MAXSEC}s})"
 
 # --- 3. pcap -> mcap (cached; keyed on duration) ---
 MCAP="$OUT/faithful_${DUR}s.mcap"

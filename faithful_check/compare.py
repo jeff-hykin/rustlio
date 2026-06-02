@@ -85,14 +85,23 @@ def main():
     ru_t, ru_xyz = ru[:, 0] - ru[0, 0], ru[:, 1:4]
     ru_v = np.linalg.norm(ru[:, 4:7], axis=1) if ru.shape[1] >= 7 else None
 
-    # --- divergence cutoff (first big inter-sample jump on upstream) ---
+    # --- divergence cutoff: SUSTAINED non-physical jumps on upstream ---
+    # The real catastrophic divergence (the original 7-37pm recording) teleports
+    # and never recovers — speed stays absurd for many frames. A single large
+    # inter-sample step, by contrast, is usually DB-odom timestamp jitter
+    # (normal motion / tiny dt) and the trajectory is fine around it. So we
+    # require the rolling MEDIAN jump over ~1 s to exceed the threshold, which
+    # ignores isolated spikes and only fires on a true runaway. Clean recordings
+    # then compare over their full length.
     jump = np.linalg.norm(np.diff(up_xyz, axis=0), axis=1)
-    di = np.where(jump > args.jump_thresh)[0]
+    w = max(1, int(round(len(up_t) / max(up_t[-1], 1e-6))))  # ~1 s in samples
+    med = np.array([np.median(jump[i:i + w]) for i in range(len(jump))])
+    di = np.where(med > args.jump_thresh)[0]
     diverged = len(di) > 0
-    cutoff = up_t[di[0] + 1] if diverged else up_t[-1]
-    print(f"[divergence] first upstream jump > {args.jump_thresh} m at t={cutoff:.2f}s "
-          f"(jump={jump[di[0]]:.2f} m)" if diverged
-          else f"[divergence] none > {args.jump_thresh} m; comparing full {cutoff:.1f}s")
+    cutoff = up_t[di[0]] if diverged else up_t[-1]
+    print(f"[divergence] sustained upstream jump > {args.jump_thresh} m/frame at t={cutoff:.2f}s "
+          f"(median jump {med[di[0]]:.2f} m)" if diverged
+          else f"[divergence] none sustained > {args.jump_thresh} m/frame; comparing full {cutoff:.1f}s")
     t_cmp = min(cutoff, ru_t[-1])
 
     # --- speed profiles (plot + coarse offset seed) ---

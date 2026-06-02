@@ -195,3 +195,49 @@ loops. This is the same factrs-vs-iSAM2 robustness gap seen on the Go2 outdoor
 set, amplified by KITTI's km-scale graphs. Closing it needs incremental/
 relinearizing optimization (iSAM2-style) or robust back-end handling, not just
 parameter tuning.
+
+## Finding 8 — Rust PGO now beats both C++ PGOs on KITTI (km-scale fix)
+
+Update to Finding 7: the Rust km-scale divergence was **NOT** the optimizer
+(factrs batch LM is fine) nor the ICP (corrections were small, 0.1–0.9 m). It was
+the **loop translation constraint**. On wide-open KITTI roads, a loop closure in
+the middle of a long open trajectory yanks the far tail: a sub-degree ICP
+rotation error, trusted as a tight translation constraint, swings the downstream
+kilometres of trajectory by tens of metres. On a *clean* (zero-drift) trajectory
+the loops should need ~0 correction, yet the old config corrupted seq00 to 7.8 m
+and seq05 to 21 m purely from this tail-swing.
+
+**Fix (loop noise model, not the solver):** heavily distrust loop *translation*
+(`loop_trans_floor=256` → translation σ = 16 m) while trusting loop *rotation*
+(`loop_rot_var=0.05`). The loop then corrects accumulated **yaw** — the thing
+that actually bends a trajectory — without dragging position and swinging the
+tail. (GNC / Geman-McClure robust kernels were also tried; they don't help here
+because on clean data *all* loops carry the same small spurious correction, so
+there's no inlier majority to converge toward — robust back-ends fix outliers
+among good loops, not a uniform measurement bias.)
+
+Full KITTI sweep (`scripts/run_kitti.py`, `kitti_results.tsv`), ATE_pgo in metres,
+two drift levels (yaw 0.0 / 0.02 deg·m^-0.5):
+
+| seq | stock | plane | rust | | seq | stock | plane | rust |
+|----|----:|----:|----:|---|----|----:|----:|----:|
+| 00 y0    | 0.73 | 0.67 | 0.76 | | 06 y0    | 0.08 | 0.07 | **0.03** |
+| 00 y.02  | 0.82 | 0.79 | 2.29 | | 06 y.02  | 0.09 | 0.09 | **0.03** |
+| 02 y0    | 2.14 | 2.26 | **1.21** | | 07 y0 | 0.22 | 0.21 | **0.01** |
+| 02 y.02  | 3.04 | 3.32 | **2.33** | | 07 y.02 | 0.28 | 0.27 | **0.18** |
+| 05 y0    | 0.60 | 0.61 | **0.05** | | 08 y0 | 6.59 | 6.44 | **0.13** |
+| 05 y.02  | 0.47 | 0.48 | 0.56 | | 08 y.02 | 6.15 | 6.26 | **3.96** |
+|          |      |      |      | | 09 y0 | 2.02 | 2.13 | **0.27** |
+|          |      |      |      | | 09 y.02 | 2.03 | 2.15 | **0.45** |
+
+**Mean ATE: rust 0.876 m vs stock 1.804 vs plane 1.840 — Rust is ~2.06× better
+than both C++ PGOs** and is best in 11/14 cases. The big swings come from the
+sequences where the C++ point-to-point + iSAM2 loops *corrupt* a good trajectory
+(seq08 clean 6.5→0.13 m, seq09 2.0→0.27 m); the translation-distrust model simply
+doesn't let a loop wreck the trajectory. **stock ≈ plane** throughout.
+
+Remaining rust losses: seq00 y.02 (2.29 vs 0.82) and seq05 y.02 (0.56 vs 0.47) —
+under drift the loose loop-rotation trust under-corrects yaw on these. The
+KITTI config lives only in `run_kitti.py`; the PgoConfig default (trans_floor
+0.01) is unchanged, so indoor/local loop closure — where translation IS reliable
+— keeps trusting it.

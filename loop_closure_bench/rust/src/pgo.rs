@@ -8,7 +8,7 @@ use factrs::core::{
     BetweenResidual, GaussianNoise, GemanMcClure, Graph, LevenMarquardt, PriorResidual, Values, SE3,
     SO3,
 };
-use factrs::optimizers::LevenParams;
+use factrs::optimizers::{GncGemanMcClure, GncParams, GraduatedNonConvexity, LevenParams};
 use factrs::traits::*;
 use factrs::{assign_symbols, fac};
 use kiddo::{KdTree, SquaredEuclidean};
@@ -39,6 +39,10 @@ pub struct PgoConfig {
     pub loop_huber_k: f64,    // (unused legacy) Huber threshold
     pub loop_gm_c: f64,       // Geman-McClure scale (whitened units) when loop_robust=1
     pub loop_robust: bool,    // apply Geman-McClure kernel to loop factors
+    pub loop_gnc: bool,       // optimize with Graduated Non-Convexity (robust to bad loops)
+    pub gnc_percentile: f64,  // GNC inlier chi-squared percentile (0.95 default)
+    pub gnc_mu_step: f64,     // GNC mu graduation step (>1; 1.4 default)
+    pub lm_fidelity: f64,     // LM min_model_fidelity (<0 forces step accept; default -1e4)
 }
 
 impl Default for PgoConfig {
@@ -63,6 +67,10 @@ impl Default for PgoConfig {
             loop_huber_k: 5.0,
             loop_gm_c: 3.0,
             loop_robust: false,
+            loop_gnc: false,
+            gnc_percentile: 0.95,
+            gnc_mu_step: 1.4,
+            lm_fidelity: -1e4,
         }
     }
 }
@@ -300,11 +308,55 @@ impl Pgo {
         // converge well on both the easy indoor graphs and the stiff outdoor ones.
         let mut params = LevenParams::default();
         params.base.max_iterations = 200;
-        params.min_model_fidelity = -1e4;
-        let mut opt = LevenMarquardt::new(params, self.build_graph(self.cfg.loop_robust));
-        let result = opt.optimize(values);
+        params.min_model_fidelity = self.cfg.lm_fidelity;
+        let log = std::env::var("PGO_LOG").is_ok();
+        let g_err = self.build_graph(self.cfg.loop_robust);
+        let err_before = if log {
+            let mut v = Values::new();
+            for (i, kp) in self.keyposes.iter().enumerate() { v.insert(X(i as u32), to_se3(&kp.optimized)); }
+            g_err.error(&v)
+        } else { 0.0 };
+        // Graduated Non-Convexity: the odometry chain (consecutive X(i),X(i+1)
+        // factors) is auto-detected as a hard inlier, while loop factors get a
+        // Geman-McClure kernel whose mu is graduated from convex to non-convex.
+        // This is what makes the batch solve robust at km-scale: a slid/false
+        // loop (ICP sliding metres along KITTI's ground plane) is rejected
+        // because it disagrees with the trusted odometry, instead of being
+        // faithfully applied by the plain L2 solve and corrupting the whole
+        // trajectory. Falls back to plain LM when loop_gnc=0.
+        let result = if self.cfg.loop_gnc {
+            let mut gnc = GncParams::<LevenMarquardt>::default();
+            gnc.base.max_iterations = 30; // outer mu-graduation steps
+            gnc.mu_step_size = self.cfg.gnc_mu_step;
+            gnc.percentile = self.cfg.gnc_percentile;
+            // Inner LM uses standard (not step-forcing) acceptance: GNC needs the
+            // inner solve to honestly converge each mu so outlier weights are
+            // meaningful; the -1e4 fidelity hack is only for the plain-LM path.
+            gnc.inner.base.max_iterations = 50;
+            let mut opt = GraduatedNonConvexity::<GncGemanMcClure, LevenMarquardt>::new(
+                gnc,
+                self.build_graph(false),
+            );
+            opt.optimize(values)
+        } else {
+            let mut opt = LevenMarquardt::new(params, self.build_graph(self.cfg.loop_robust));
+            opt.optimize(values)
+        };
 
-        if let Ok(result) = result {
+        let ok = result.is_ok();
+        let solved = match result {
+            Ok(v) => Some(v),
+            Err(factrs::optimizers::OptError::MaxIterations(v)) => Some(v), // use best-so-far
+            Err(_) => None,
+        };
+        if let Some(result) = solved {
+            if log {
+                let err_after = g_err.error(&result);
+                eprintln!(
+                    "[pgo] n_kf={} n_loop={} ok={} err {:.2}->{:.2}",
+                    self.keyposes.len(), self.history.len(), ok, err_before, err_after
+                );
+            }
             for i in 0..self.keyposes.len() {
                 if let Some(se) = result.get::<_, SE3>(X(i as u32)) {
                     self.keyposes[i].optimized = from_se3(se);

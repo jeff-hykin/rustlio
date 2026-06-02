@@ -100,6 +100,10 @@ fn main() {
     cfg.loop_huber_k = getd("loop_huber_k", cfg.loop_huber_k);
     cfg.loop_gm_c = getd("loop_gm_c", cfg.loop_gm_c);
     cfg.loop_robust = geti("loop_robust", cfg.loop_robust as i32) != 0;
+    cfg.loop_gnc = geti("loop_gnc", cfg.loop_gnc as i32) != 0;
+    cfg.gnc_percentile = getd("gnc_percentile", cfg.gnc_percentile);
+    cfg.gnc_mu_step = getd("gnc_mu_step", cfg.gnc_mu_step);
+    cfg.lm_fidelity = getd("lm_fidelity", cfg.lm_fidelity);
 
     let frames = io::load(&poses, &clouds);
     eprintln!("[pgo_bench_rs] loaded {} frames", frames.len());

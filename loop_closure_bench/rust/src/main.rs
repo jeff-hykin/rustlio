@@ -104,6 +104,10 @@ fn main() {
     cfg.gnc_percentile = getd("gnc_percentile", cfg.gnc_percentile);
     cfg.gnc_mu_step = getd("gnc_mu_step", cfg.gnc_mu_step);
     cfg.lm_fidelity = getd("lm_fidelity", cfg.lm_fidelity);
+    cfg.loop_icp_cov = geti("loop_icp_cov", cfg.loop_icp_cov as i32) != 0;
+    cfg.reg_sigma = getd("reg_sigma", cfg.reg_sigma);
+    cfg.loop_info_max_sigma = getd("loop_info_max_sigma", cfg.loop_info_max_sigma);
+    cfg.loop_info_min_sigma = getd("loop_info_min_sigma", cfg.loop_info_min_sigma);
 
     let frames = io::load(&poses, &clouds);
     eprintln!("[pgo_bench_rs] loaded {} frames", frames.len());

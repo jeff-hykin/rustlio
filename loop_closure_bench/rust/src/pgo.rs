@@ -12,7 +12,7 @@ use factrs::optimizers::{GncGemanMcClure, GncParams, GraduatedNonConvexity, Leve
 use factrs::traits::*;
 use factrs::{assign_symbols, fac};
 use kiddo::{KdTree, SquaredEuclidean};
-use nalgebra::{Isometry3, Quaternion, Translation3, UnitQuaternion, Vector3};
+use nalgebra::{Isometry3, Matrix6, Quaternion, Translation3, UnitQuaternion, Vector3};
 
 use crate::icp;
 
@@ -43,6 +43,10 @@ pub struct PgoConfig {
     pub gnc_percentile: f64,  // GNC inlier chi-squared percentile (0.95 default)
     pub gnc_mu_step: f64,     // GNC mu graduation step (>1; 1.4 default)
     pub lm_fidelity: f64,     // LM min_model_fidelity (<0 forces step accept; default -1e4)
+    pub loop_icp_cov: bool,   // derive loop noise from the ICP Hessian (auto, no trans_floor)
+    pub reg_sigma: f64,       // per-point registration noise (m) scaling the ICP information
+    pub loop_info_max_sigma: f64, // loosest allowed loop sigma (max distrust on sliding dirs)
+    pub loop_info_min_sigma: f64, // tightest allowed loop sigma (cap over-trust on stiff dirs)
 }
 
 impl Default for PgoConfig {
@@ -71,6 +75,10 @@ impl Default for PgoConfig {
             gnc_percentile: 0.95,
             gnc_mu_step: 1.4,
             lm_fidelity: -1e4,
+            loop_icp_cov: false,
+            reg_sigma: 0.1,
+            loop_info_max_sigma: 50.0,
+            loop_info_min_sigma: 0.05,
         }
     }
 }
@@ -90,6 +98,7 @@ pub struct LoopEdge {
     pub offset: Isometry3<f64>,
     pub score: f64,
     pub icp_t: f64, // magnitude of the ICP correction (≈0 = no slide on clean data)
+    pub info: Matrix6<f64>, // ICP plane Hessian (rotation-first); loop information up to 1/σ²
 }
 
 pub struct Pgo {
@@ -248,8 +257,33 @@ impl Pgo {
             offset,
             score: res.fitness,
             icp_t: res.transform.translation.vector.norm(),
+            info: res.info,
         });
         self.last_loop_ts = cur_ts;
+    }
+
+    // Turn an ICP plane-Hessian into an anisotropic loop noise model. The Hessian
+    // already encodes observability: well-constrained directions (rotation, wall
+    // normals) have large eigenvalues, the in-plane "sliding" translation has
+    // ~zero -- so using it as the factor information automatically distrusts
+    // sliding without any hand-set loop_trans_floor. We scale by 1/reg_sigma^2
+    // (reg_sigma = per-point registration noise, a sensor property) and clamp the
+    // eigenvalues to [1/max_sigma^2, 1/min_sigma^2] for conditioning: the floor
+    // makes it positive-definite and caps how much a sliding direction is
+    // distrusted; the ceiling stops a many-inlier loop from over-trusting past
+    // odometry. All three bounds are dataset/scale-independent.
+    fn icp_noise(&self, info: &Matrix6<f64>) -> Option<GaussianNoise<6>> {
+        let scaled = info / (self.cfg.reg_sigma * self.cfg.reg_sigma);
+        let lo = 1.0 / (self.cfg.loop_info_max_sigma * self.cfg.loop_info_max_sigma);
+        let hi = 1.0 / (self.cfg.loop_info_min_sigma * self.cfg.loop_info_min_sigma);
+        let mut eig = scaled.symmetric_eigen();
+        for i in 0..6 {
+            eig.eigenvalues[i] = eig.eigenvalues[i].clamp(lo, hi);
+        }
+        let clamped = eig.eigenvectors
+            * Matrix6::from_diagonal(&eig.eigenvalues)
+            * eig.eigenvectors.transpose();
+        GaussianNoise::<6>::from_matrix_inf(clamped.as_view())
     }
 
     // Build the pose graph (prior + odometry + loop factors). `robust` toggles a
@@ -265,6 +299,18 @@ impl Pgo {
             );
         }
         for lp in &self.history {
+            // Preferred path: derive the loop noise from the ICP information matrix
+            // (anisotropic, automatic distrust of sliding -- no loop_trans_floor).
+            if self.cfg.loop_icp_cov {
+                if let Some(noise) = self.icp_noise(&lp.info) {
+                    graph.add_factor(fac![
+                        BetweenResidual::new(to_se3(&lp.offset)),
+                        (X(lp.target as u32), X(lp.source as u32)),
+                        noise
+                    ]);
+                    continue;
+                }
+            }
             let rot_sig = self.cfg.loop_rot_var.sqrt();
             let trans_sig = lp.score.max(self.cfg.loop_trans_floor).sqrt();
             if robust {

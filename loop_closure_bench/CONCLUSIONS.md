@@ -241,3 +241,33 @@ under drift the loose loop-rotation trust under-corrects yaw on these. The
 KITTI config lives only in `run_kitti.py`; the PgoConfig default (trans_floor
 0.01) is unchanged, so indoor/local loop closure — where translation IS reliable
 — keeps trusting it.
+
+### Finding 8 addendum — why the loop noise isn't auto-derived from the ICP
+
+Natural follow-up: instead of a hand-set `loop_trans_floor`, derive the loop
+covariance from the ICP information matrix `H = Σ JᵀJ` (point-to-plane Hessian,
+exposed as `IcpResult.info`, used via `loop_icp_cov=1`). `H` does correctly flag
+the in-plane "sliding" directions as near-zero eigenvalues. **But it makes KITTI
+worse, not better** (clean seq05: trans_floor 0.05 m vs loop_icp_cov best ~2.0 m).
+
+Reason — and it's the key insight: the tail-swing is **not** a local-measurement
+problem, it's **global graph conditioning**. The ICP is *locally confident* about
+translation (the planes align tightly), so the data-driven covariance *trusts*
+it. But on a long open trajectory, a translation constraint between two far-apart
+poses can only be satisfied by rotating the entire downstream chain (translations
+are stiff; rotation is the cheap DOF), which swings the tail by tens of metres
+for a centimetre of loop error. Local confidence is exactly the wrong signal.
+
+So "trust loop rotation, distrust loop translation" is a **structural prior** for
+loop closure on long vehicle trajectories (standard in pose-graph SLAM), not a
+per-dataset magic number. A user doesn't tune it per-run; they pick a *regime*:
+- indoor / structured  → trust loop translation (`PgoConfig` default,
+  trans_floor 0.01) — short loops, no long open tail, translation IS reliable.
+- outdoor / vehicle / open → distrust loop translation (`run_all.py`
+  `RUST_OUTDOOR`, `run_kitti.py`) — long open tails, translation swings them.
+
+`run_all.py:rust_cfg()` already auto-selects by scene ("outdoor" → distrust).
+And the value is not knife-edge: clean seq05 ATE is 0.48 / 0.15 / 0.05 m at
+trans_floor 16 / 64 / 256 — anything "large" works, so a regime default
+generalizes without per-dataset tuning. The `loop_icp_cov` path is kept
+(off by default) as a documented dead-end for this failure mode.

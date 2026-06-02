@@ -55,6 +55,14 @@ fn estimate_normals(pts: &[Vector3<f64>], tree: &KdTree<f64, 3>, k: usize) -> Ve
 pub struct IcpResult {
     pub transform: Isometry3<f64>, // aligned = transform * source
     pub fitness: f64,              // mean squared inlier distance (m^2), inf if rejected
+    // Plane-only Hessian H = Σ JᵀJ at convergence (rotation-first 6D ordering, in
+    // the aligned/world frame). This is the loop measurement's information matrix
+    // up to a 1/σ² point-noise scale: poorly-observable directions (in-plane
+    // "sliding" translation) appear as near-zero eigenvalues, so using H as the
+    // loop factor's information automatically distrusts them -- no hand-tuned
+    // loop_trans_floor needed. Excludes the point-to-point anchor (a numerical
+    // stabilizer, not real information) so sliding is genuinely uninformative.
+    pub info: nalgebra::Matrix6<f64>,
 }
 
 /// Align `source` to `target` (both already in a common world frame, init =
@@ -67,7 +75,11 @@ pub fn point_to_plane(
     max_dist: f64,
     min_inliers: usize,
 ) -> IcpResult {
-    let reject = IcpResult { transform: Isometry3::identity(), fitness: f64::INFINITY };
+    let reject = IcpResult {
+        transform: Isometry3::identity(),
+        fitness: f64::INFINITY,
+        info: nalgebra::Matrix6::zeros(),
+    };
     if source.len() < min_inliers || target.len() < min_inliers {
         return reject;
     }
@@ -94,10 +106,12 @@ pub fn point_to_plane(
     let mut rot = Matrix3::identity();
     let mut trans = Vector3::zeros();
     let mut last_fitness = f64::INFINITY;
+    let mut last_info = nalgebra::Matrix6::<f64>::zeros();
     let log = std::env::var("ICP_LOG").is_ok();
 
     for _iter in 0..max_iter {
         let mut h = nalgebra::Matrix6::<f64>::zeros();
+        let mut h_plane = nalgebra::Matrix6::<f64>::zeros(); // plane-only info (no anchor)
         let mut g = nalgebra::Vector6::<f64>::zeros();
         let mut sq_sum = 0.0;
         let mut p2pl_sum = 0.0;
@@ -119,6 +133,7 @@ pub fn point_to_plane(
             j.fixed_rows_mut::<3>(0).copy_from(&jrot);
             j.fixed_rows_mut::<3>(3).copy_from(&n);
             h += j * j.transpose();
+            h_plane += j * j.transpose();
             g += j * r;
             // Small point-to-point anchor. Plane-only ICP can slide freely in a
             // wall plane (zero plane cost); the point-to-point term's minimum on
@@ -138,6 +153,7 @@ pub fn point_to_plane(
         if inliers < min_inliers {
             return reject;
         }
+        last_info = h_plane;
         let fitness = sq_sum / inliers as f64;
         // Tikhonov damping scaled to H's magnitude. For a plane-dominant target
         // the in-plane translation is unobservable (a null space of H); without
@@ -184,5 +200,6 @@ pub fn point_to_plane(
     IcpResult {
         transform: Isometry3::from_parts(Translation3::from(trans), rotation.into()),
         fitness: last_fitness,
+        info: last_info,
     }
 }

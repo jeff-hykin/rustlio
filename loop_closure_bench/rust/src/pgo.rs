@@ -52,6 +52,7 @@ pub struct PgoConfig {
     pub loop_huber_scale: f64, // ICP point-to-plane Huber delta = scale * submap_resolution (0=off)
     pub min_inlier_ratio: f64, // reject a loop whose ICP overlap is below this (0=off)
     pub loop_fit_max: f64,     // reject loop if fitness/submap_resolution^2 > this (scale-aware; 0=off)
+    pub loop_candidates: usize, // ICP-validate the top-N loop candidates, keep best fitness (1=off)
     // Scan Context loop detection (place recognition) instead of spatial-NN. Finds
     // the true revisit under drift, where spatial-NN matches the wrong place.
     pub use_scan_context: bool,
@@ -110,6 +111,7 @@ impl Default for PgoConfig {
             loop_huber_scale: 1.0,
             min_inlier_ratio: 0.0,
             loop_fit_max: 2.0,
+            loop_candidates: 1,
             use_scan_context: false,
             sc_max_range: 80.0,
             sc_dist_thresh: 0.4,
@@ -247,21 +249,23 @@ impl Pgo {
         if self.last_loop_ts >= 0.0 && cur_ts - self.last_loop_ts < self.cfg.min_loop_detect_duration {
             return;
         }
-        // Candidate selection: Scan Context (appearance/place-recognition, robust
-        // to drift) or the default spatial nearest-neighbour in the drifted frame.
-        let mut loop_idx: i32 = -1;
-        if self.cfg.use_scan_context {
+        // Gather candidate target keyframes (time-gated). The true revisit isn't
+        // always the nearest spatial / best descriptor (esp. under drift on the
+        // Go2 sensor), so we collect the top loop_candidates and ICP-validate each,
+        // keeping the best-fitness one -- like PCL/C++ does.
+        let k = self.cfg.loop_candidates.max(1);
+        let candidates: Vec<usize> = if self.cfg.use_scan_context {
             let cur_sc = self.keyposes[n - 1].sc.as_ref().unwrap();
-            // time-gated past descriptors (exclude recent revisits)
             let past: Vec<(usize, &Descriptor)> = self.keyposes[..n - 1]
                 .iter()
                 .enumerate()
                 .filter(|(_, kp)| (cur_ts - kp.ts).abs() > self.cfg.loop_time_thresh)
                 .filter_map(|(i, kp)| kp.sc.as_ref().map(|d| (i, d)))
                 .collect();
-            if let Some((j, _dist, _yaw)) = scan_context::best_match(cur_sc, &past, &self.sc_config()) {
-                loop_idx = past[j].0 as i32;
-            }
+            scan_context::top_matches(cur_sc, &past, &self.sc_config(), k)
+                .into_iter()
+                .map(|(j, _, _)| past[j].0)
+                .collect()
         } else {
             let cur_t = self.keyposes[n - 1].optimized.translation.vector;
             let entries: Vec<[f64; 3]> = self.keyposes[..n - 1]
@@ -275,23 +279,37 @@ impl Pgo {
             let r2 = self.cfg.loop_search_radius * self.cfg.loop_search_radius;
             let mut found = tree.within::<SquaredEuclidean>(&[cur_t.x, cur_t.y, cur_t.z], r2);
             found.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
-            for nn in &found {
-                let i = nn.item as usize;
-                if (cur_ts - self.keyposes[i].ts).abs() > self.cfg.loop_time_thresh {
-                    loop_idx = i as i32;
-                    break;
+            found
+                .iter()
+                .map(|nn| nn.item as usize)
+                .filter(|&i| (cur_ts - self.keyposes[i].ts).abs() > self.cfg.loop_time_thresh)
+                .take(k)
+                .collect()
+        };
+
+        // ICP-validate each candidate; keep the lowest-fitness one that passes all
+        // gates. This is what lets the true (best-aligning) revisit win over a
+        // nearer-but-wrong candidate.
+        let cur_idx = (n - 1) as i32;
+        let mut best: Option<LoopEdge> = None;
+        for &loop_idx in &candidates {
+            if let Some(edge) = self.eval_candidate(loop_idx as i32, cur_idx) {
+                if best.as_ref().map_or(true, |b| edge.score < b.score) {
+                    best = Some(edge);
                 }
             }
         }
-        if loop_idx < 0 {
-            return;
+        if let Some(edge) = best {
+            self.cache.push(edge);
+            self.last_loop_ts = cur_ts;
         }
+    }
 
-        let cur_idx = (n - 1) as i32;
+    // Build submaps for one candidate, run ICP, apply all loop gates. Returns the
+    // LoopEdge if it passes, else None.
+    fn eval_candidate(&self, loop_idx: i32, cur_idx: i32) -> Option<LoopEdge> {
         let target = self.submap(loop_idx, self.cfg.loop_submap_half_range);
         let source = self.submap(cur_idx, self.cfg.loop_source_submap_half_range);
-        // Huber delta scales with submap voxel so it transfers across datasets
-        // (residuals scale with resolution). 0 = off.
         let huber = self.cfg.loop_huber_scale * self.cfg.submap_resolution;
         let res = icp::point_to_plane(
             &source,
@@ -302,46 +320,33 @@ impl Pgo {
             huber,
         );
         if res.fitness > self.cfg.loop_score_thresh {
-            return;
+            return None;
         }
-        // Overlap gate: a true revisit aligns most of the source submap; a false
-        // match (wrong place) leaves much of it without a correspondence.
         if res.inlier_ratio < self.cfg.min_inlier_ratio {
-            return;
+            return None;
         }
-        // Scale-aware residual gate: normalize the ICP fitness by voxel^2 so one
-        // threshold transfers across datasets. Repetitive-structure false matches
-        // align with HIGH overlap but elevated residual; this is the discriminator
-        // the overlap gate misses.
         if self.cfg.loop_fit_max > 0.0
             && res.fitness / (self.cfg.submap_resolution * self.cfg.submap_resolution)
                 > self.cfg.loop_fit_max
         {
-            return;
+            return None;
         }
         let cur = &self.keyposes[cur_idx as usize];
         let tgt = &self.keyposes[loop_idx as usize];
         let refined = res.transform * cur.optimized;
         let offset = tgt.optimized.inverse() * refined;
-        // Reject false alignments where ICP slid metres along a wall: a true
-        // revisit needs only a small correction. (PCL point-to-plane slides
-        // less, but the Rust GN point-to-plane can run further into the slide.)
         if self.cfg.max_loop_offset > 0.0
             && offset.translation.vector.norm() > self.cfg.max_loop_offset
         {
-            return;
+            return None;
         }
-        // Loop span = odometry arc length between the two looped keyframes. This
-        // is the lever arm that turns a small loop-translation error into a large
-        // tail-swing, so it sets how much to distrust the loop's translation
-        // (see loop_trans_scale). Drift-free (uses raw local odometry).
         let mut arc = 0.0;
         for i in (loop_idx as usize)..(cur_idx as usize) {
             arc += (self.keyposes[i + 1].local.translation.vector
                 - self.keyposes[i].local.translation.vector)
                 .norm();
         }
-        self.cache.push(LoopEdge {
+        Some(LoopEdge {
             target: loop_idx as usize,
             source: cur_idx as usize,
             ts_target: tgt.ts,
@@ -351,8 +356,7 @@ impl Pgo {
             icp_t: res.transform.translation.vector.norm(),
             info: res.info,
             arc,
-        });
-        self.last_loop_ts = cur_ts;
+        })
     }
 
     // Turn an ICP plane-Hessian into an anisotropic loop noise model. The Hessian

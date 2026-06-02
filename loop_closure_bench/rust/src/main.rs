@@ -113,6 +113,7 @@ fn main() {
     cfg.loop_huber_scale = getd("loop_huber_scale", cfg.loop_huber_scale);
     cfg.min_inlier_ratio = getd("min_inlier_ratio", cfg.min_inlier_ratio);
     cfg.loop_fit_max = getd("loop_fit_max", cfg.loop_fit_max);
+    cfg.loop_candidates = geti("loop_candidates", cfg.loop_candidates as i32) as usize;
     cfg.use_scan_context = geti("use_scan_context", cfg.use_scan_context as i32) != 0;
     cfg.sc_max_range = getd("sc_max_range", cfg.sc_max_range);
     cfg.sc_dist_thresh = getd("sc_dist_thresh", cfg.sc_dist_thresh);

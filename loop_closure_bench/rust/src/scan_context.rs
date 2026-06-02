@@ -143,3 +143,32 @@ pub fn best_match(
         _ => None,
     }
 }
+
+/// Like `best_match` but returns up to `n` candidates below threshold, sorted by
+/// SC distance (best first). For multi-candidate loop validation: the true
+/// revisit isn't always the closest descriptor, so the caller ICP-checks several.
+pub fn top_matches(
+    cur: &Descriptor,
+    past: &[(usize, &Descriptor)],
+    cfg: &ScanContextConfig,
+    n: usize,
+) -> Vec<(usize, f32, f64)> {
+    let mut shortlist: Vec<(usize, f32)> = past
+        .iter()
+        .enumerate()
+        .map(|(i, (_, d))| (i, ringkey_dist(&cur.ringkey, &d.ringkey)))
+        .collect();
+    shortlist.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+    shortlist.truncate(cfg.ringkey_k.max(n));
+    let mut scored: Vec<(usize, f32, f64)> = shortlist
+        .into_iter()
+        .map(|(i, _)| {
+            let (d, yaw) = distance(cur, past[i].1);
+            (i, d, yaw)
+        })
+        .filter(|(_, d, _)| *d < cfg.dist_thresh as f32)
+        .collect();
+    scored.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+    scored.truncate(n);
+    scored
+}

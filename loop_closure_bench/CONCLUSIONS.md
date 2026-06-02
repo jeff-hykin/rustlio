@@ -519,3 +519,32 @@ Two principled objective tweaks both failed to close the go2/grass gaps -> the
 limit may not be the ICP objective but detection (does rust find the true go2
 closure?) and/or the batch backend. Next: GICP (plane-to-plane, per-point
 covariances) and a detection check on go2-outdoor.
+
+## Finding 16 — multi-candidate loop validation (net-negative) -> the gap is the BACKEND
+
+Added multi-candidate loop validation (`loop_candidates`, default 1 = off): gather
+the top-N candidates (Scan Context top-N or spatial within-radius) and ICP-validate
+each, keeping the best-fitness one (what C++/PCL effectively do). Refactor:
+`eval_candidate()` + `scan_context::top_matches()`.
+
+Result: net-negative on the headline gaps. go2-outdoor SC-multi 6.09->5.98
+(marginal), spatial-multi 6.09->8.06 (worse); grass 3.61->4.29 (worse); indoor hk4
+1.06->0.89 (better); KITTI/stair unchanged. **On the short-range Go2 sensor ICP
+fitness is NOT a reliable discriminator** -- a coincidentally-similar wrong place
+aligns *better* than the true revisit (seen from a different lane), so
+best-fitness selection picks wrong.
+
+**Three ICP/detection levers now tried (coarse-to-fine, symmetric, multi-candidate)
+all fail to close go2-outdoor/grass. Root cause is the BACKEND, not the front-end.**
+C++ SimplePGO uses GTSAM **iSAM2 (incremental)**: as it closes earlier loops the
+whole trajectory de-drifts, so by the trajectory's end the true revisit is
+spatially close and trivially found (Finding 10: C++ matched end->start). The Rust
+PGO re-solves the full graph BATCH from a world_correction-warped init each loop,
+so it never de-drifts *during* mapping -> spatial/descriptor detection keeps
+matching the wrong (un-de-drifted) place, and no front-end tweak fixes that.
+
+**Conclusion: beating C++ on go2-outdoor (and real-time) requires an incremental,
+relinearizing backend (iSAM2-style), not more ICP/detection work.** factrs is
+batch; this is the substantial next investment. The committed ICP robustness
+(Finding 14: Huber + scale-aware gate) stands -- it fixed the corruption and holds
+KITTI; the remaining "beat C++ everywhere" gap is architectural.

@@ -83,7 +83,7 @@ impl Default for PgoConfig {
             loop_huber_k: 5.0,
             loop_gm_c: 3.0,
             loop_robust: false,
-            loop_gnc: false,
+            loop_gnc: true,
             gnc_percentile: 0.95,
             gnc_mu_step: 1.4,
             lm_fidelity: -1e4,

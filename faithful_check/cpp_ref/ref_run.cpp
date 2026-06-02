@@ -1,5 +1,5 @@
 // Standalone harness for the in-repo C++ FAST-LIO map_builder (the source the
-// Rust rustlio was ported from). Reads the flat sensor dump produced by
+// Rust rustlio2 was ported from). Reads the flat sensor dump produced by
 // faithful_check/dump_flat.py (identical bytes to the Rust flat-runner), drives
 // MapBuilder exactly like lio_node's syncPackage loop, and logs per-frame state
 // so the two implementations can be diffed to find where they first diverge.
@@ -45,7 +45,7 @@ int main(int argc, char **argv) {
     if (!read_flat(argv[1], imus, frames)) return 1;
     printf("loaded %zu imu, %zu frames\n", imus.size(), frames.size());
 
-    // Effective config = config_examples/mid360.yaml resolved by rustlio.
+    // Effective config = config_examples/mid360.yaml resolved by rustlio2.
     Config cfg;
     cfg.lidar_filter_num = 3;
     cfg.lidar_min_range = 0.5; cfg.lidar_max_range = 20.0;

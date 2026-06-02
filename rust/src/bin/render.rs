@@ -15,8 +15,8 @@
 use std::io::{BufReader, Read};
 use std::fs::File;
 
-use rustlio::commons::*;
-use rustlio::map_builder::{BuilderStatus, MapBuilder};
+use rustlio2::commons::*;
+use rustlio2::map_builder::{BuilderStatus, MapBuilder};
 
 const CLOUD_PORT: u16 = 56301;
 const IMU_PORT: u16 = 56401;
@@ -111,7 +111,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("config {config_path} not found, using defaults");
         Config::default()
     };
-    rustlio::logging::init(config.log_level);
+    rustlio2::logging::init(config.log_level);
     log::info!("Config: {config_path} (filter_num={}, min/max range={}/{})",
         config.lidar_filter_num, config.lidar_min_range, config.lidar_max_range);
 
@@ -301,7 +301,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Accumulate the world map (bounded via periodic voxel downsample).
         world_map.extend(world_scan);
         if frame_idx % 20 == 19 {
-            world_map = rustlio::voxel_grid::downsample(&world_map, config.map_resolution);
+            world_map = rustlio2::voxel_grid::downsample(&world_map, config.map_resolution);
         }
 
         if frame_idx % 50 == 0 {
@@ -312,7 +312,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Final accumulated odom-adjusted world cloud.
-    world_map = rustlio::voxel_grid::downsample(&world_map, config.map_resolution);
+    world_map = rustlio2::voxel_grid::downsample(&world_map, config.map_resolution);
     let map_xyz: Vec<[f32; 3]> = world_map.iter().map(|p| [p.x, p.y, p.z]).collect();
     rec.log_static(
         "world/cloud",

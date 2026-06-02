@@ -23,7 +23,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let files = &args[2..];
 
     // No config file here; default to Normal (override via RUST_LOG).
-    rustlio::logging::init(rustlio::commons::LogLevel::Normal);
+    rustlio2::logging::init(rustlio2::commons::LogLevel::Normal);
 
     let rec = rerun::RecordingStreamBuilder::new("fastlio2_odom").save(out)?;
 

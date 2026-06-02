@@ -9198,7 +9198,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustlio"
+name = "rustlio2"
 version = "0.2.3"
 dependencies = [
  "approx",

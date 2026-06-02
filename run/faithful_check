@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Faithfulness check: does rustlio reproduce upstream C++ FAST-LIO?
+# Faithfulness check: does rustlio2 reproduce upstream C++ FAST-LIO?
 #
 # Pipeline (all data on one sensor clock, so no cross-clock guessing):
 #   1. extract the upstream C++ FAST-LIO trajectory from the DimOS recording DB
@@ -9,7 +9,7 @@
 #      odom step jumps far past what the robot can move in one frame). We cut at
 #      the first such jump and only compare BEFORE it (it never recovers).
 #   3. decode the raw Livox Mid-360 pcap (the exact sensor stream upstream ate)
-#      into an MCAP of Livox CustomMsg + Imu that rustlio reads unchanged.
+#      into an MCAP of Livox CustomMsg + Imu that rustlio2 reads unchanged.
 #   4. run the Rust binary on that MCAP for the pre-divergence window.
 #   5. overlay + metrics (yaw-aligned ATE, XY/Z split, scale) -> PNG + report.
 #
@@ -91,7 +91,7 @@ BIN="rust/target/release/fastlio2"
 echo "building $BIN ..."
 ( cd rust && cargo build --release --bin fastlio2 ) || { echo "rust build failed"; exit 1; }
 RU="$OUT/rust_odom_${DUR}s.npy"
-echo "running rustlio ..."
+echo "running rustlio2 ..."
 "$BIN" "$CONFIG" "$MCAP" "$RU" "$DUR" 2>/dev/null | tail -1
 
 # --- 5. compare + plot ---

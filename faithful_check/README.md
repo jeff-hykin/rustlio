@@ -1,6 +1,6 @@
-# faithful_check — is rustlio a faithful port of upstream FAST-LIO?
+# faithful_check — is rustlio2 a faithful port of upstream FAST-LIO?
 
-`./run/faithful_check` overlays the **Rust** `rustlio` trajectory against an
+`./run/faithful_check` overlays the **Rust** `rustlio2` trajectory against an
 **upstream C++ FAST-LIO** run on the *same* raw sensor data, and reports how far
 apart they are — truncated to the window *before* the C++ odometry catastrophically
 diverges (all our Go2/Mid-360 recordings eventually blow up; see jhist
@@ -55,7 +55,7 @@ Key choices and why:
   liangheming forks). It is *not* a fresh hku-mars build re-run with a config
   matched to `config_examples/mid360.yaml`. Part of any residual difference can
   be config/extrinsic mismatch rather than Rust infidelity.
-- `rustlio` scales IMU accel by `*10.0` (see `main.rs`) vs the physical
+- `rustlio2` scales IMU accel by `*10.0` (see `main.rs`) vs the physical
   `*9.80665`; the reported similarity **scale ≈1.02** is consistent with this.
 - Lidar frames are re-segmented into 100 ms windows; the C++ run's framing may
   differ slightly.

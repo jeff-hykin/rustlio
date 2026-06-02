@@ -29,7 +29,7 @@ Or via the suite: `./run/pgo_bench` (builds and benchmarks all configs).
 
 ## Notes
 - `factrs` pulls nalgebra 0.34, so this crate also uses 0.34 (the main
-  `rustlio` crate is on 0.33) — they don't share types.
+  `rustlio2` crate is on 0.33) — they don't share types.
 - Debug: `ICP_LOG=1` prints per-iteration ICP convergence; `P2P_WEIGHT=<f>`
   overrides the point-to-point anchor weight (default 0.15).
 

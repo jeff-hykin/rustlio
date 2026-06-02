@@ -1,7 +1,7 @@
 use std::path::Path;
-use rustlio::commons::*;
-use rustlio::map_builder::{BuilderStatus, MapBuilder};
-use rustlio::utils;
+use rustlio2::commons::*;
+use rustlio2::map_builder::{BuilderStatus, MapBuilder};
+use rustlio2::utils;
 
 fn load_config(path: &str) -> Config {
     if Path::new(path).exists() {
@@ -172,7 +172,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let save_mode = output_path.is_some();
 
     let config = load_config(config_path);
-    rustlio::logging::init(config.log_level);
+    rustlio2::logging::init(config.log_level);
     log::info!("Loading config from: {}", config_path);
 
     log::info!("Reading MCAP bag: {}", bag_path);

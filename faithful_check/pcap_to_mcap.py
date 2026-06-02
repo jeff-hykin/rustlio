@@ -3,7 +3,7 @@
 Convert a raw Livox Mid-360 pcap (Livox-SDK2 UDP packets) into an MCAP carrying
   /livox/lidar : livox_ros_driver2 CustomMsg   (CDR)
   /livox/imu   : sensor_msgs/Imu               (CDR)
-whose byte layouts exactly match rustlio's parse_livox_custom_msg /
+whose byte layouts exactly match rustlio2's parse_livox_custom_msg /
 parse_imu_cdr (rust/src/main.rs). This lets the *exact same raw sensor stream*
 that upstream C++ FAST-LIO consumed be fed to the Rust reimplementation, for a
 faithfulness comparison.
@@ -37,7 +37,7 @@ IMU_PORT = 56401
 DT_IMU, DT_CART_HIGH, DT_CART_LOW = 0x00, 0x01, 0x02
 HDR = 36  # bytes before data[]
 
-CDR = b"\x00\x01\x00\x00"  # CDR LE representation header (rustlio skips these 4)
+CDR = b"\x00\x01\x00\x00"  # CDR LE representation header (rustlio2 skips these 4)
 
 
 def encode_custom_msg(sec, nsec, points, timebase=0, lidar_id=0, frame_id=b""):

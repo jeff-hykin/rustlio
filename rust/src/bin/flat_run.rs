@@ -1,12 +1,12 @@
-// Rust flat-runner: drives rustlio's MapBuilder on the SAME flat sensor dump
+// Rust flat-runner: drives rustlio2's MapBuilder on the SAME flat sensor dump
 // the C++ reference harness reads (faithful_check/dump_flat.py), using the SAME
 // syncPackage logic (IMU up to cloud_end_time). This makes the Rust vs C++
 // comparison byte-identical in input and identical in framing, so any state
 // divergence is purely the algorithm port. Logs per-frame state as a 13-col npy
 // matching ref_run's CSV columns: t,x,y,z,vx,vy,vz,gx,gy,gz,bax,bay,baz.
 use std::io::Read;
-use rustlio::commons::*;
-use rustlio::map_builder::{BuilderStatus, MapBuilder};
+use rustlio2::commons::*;
+use rustlio2::map_builder::{BuilderStatus, MapBuilder};
 use ndarray::Array2;
 use ndarray_npy::write_npy;
 
@@ -54,7 +54,7 @@ fn main() {
     let (imus, frames) = read_flat(flat);
     eprintln!("loaded {} imu, {} frames", imus.len(), frames.len());
 
-    // Effective config = config_examples/mid360.yaml resolved by rustlio,
+    // Effective config = config_examples/mid360.yaml resolved by rustlio2,
     // matching faithful_check/cpp_ref/ref_run.cpp exactly.
     let mut config = Config::default();
     config.na = 0.1;

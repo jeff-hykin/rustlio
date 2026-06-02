@@ -1,14 +1,14 @@
-# rustlio
+# rustlio2
 
 A pure-Rust reimplementation of the [FAST-LIO2](https://github.com/hku-mars/FAST_LIO)
 LiDAR-Inertial Odometry algorithm — no ROS dependency and no required C++ FFI
 (an optional PCL FFI sits behind a feature flag).
 
-Published on crates.io as [`rustlio`](https://crates.io/crates/rustlio).
+Published on crates.io as [`rustlio2`](https://crates.io/crates/rustlio2).
 
 ```toml
 [dependencies]
-rustlio = "0.2"
+rustlio2 = "0.2"
 ```
 
 ## What it is

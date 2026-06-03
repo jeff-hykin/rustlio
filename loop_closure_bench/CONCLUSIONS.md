@@ -600,3 +600,42 @@ of the "robust backend" Finding 16 demanded -- no iSAM2 rewrite required. The
 remaining go2-outdoor gap is the genuinely-mis-detected loop (wrong place matched
 under drift, Finding 10/16), which GNC correctly rejects but therefore cannot use
 to de-drift -- that one still wants incremental relinearization.
+
+## Finding 18 — indoor hk_village: rust now beats C++ (keyframe spacing + source submap)
+
+With GNC on, the only focus-set scenes where rust still trailed C++ were two CLEAN
+indoor scenes: hk4 (rust 0.678 vs plane 0.345, **recall 0/3**) and hk5 (0.304 vs
+0.142). The hk4 0/3 recall was the tell -- not an ICP-precision problem but a
+DETECTION problem: rust wasn't finding the true revisits at all.
+
+Root cause: rust's default keyframe spacing (`key_pose_delta_trans=0.5`) over-
+keyframes indoor -- 378 keyframes vs C++'s 333 for the same trajectory. The denser
+graph put more (and closer) spatial-NN candidates in the loop search, so the
+detector locked onto the WRONG nearby keyframe instead of the true revisit.
+Secondary: the indoor config used a single-keyframe source submap
+(`loop_source_submap_half_range=0`), too sparse for the loop ICP to align well in
+cluttered indoor geometry.
+
+Fix (indoor config in `scripts/run_all.py`, both scale-sensible, not magic):
+- `key_pose_delta_trans=1.0` -- match C++ keyframe density (378 -> 333 kf).
+- `loop_source_submap_half_range=2` -- a few-keyframe source submap for ICP geometry.
+
+**Result** (indoor mean ATE_pgo by injected yaw drift, 6 scenes):
+| yaw | stock | plane (C++) | rust before | **rust after** |
+|----:|------:|------------:|------------:|---------------:|
+| 0.0 (clean) | 0.361 | 0.320 | 0.258 | **0.144** (2.2x better than C++) |
+| 0.5 | 0.868 | 0.848 | 0.850 | **0.823** (beats C++) |
+| 1.0 | 1.599 | 1.554 | 1.665 | 1.661 (behind, detection-limited) |
+| 2.0 | 3.222 | 3.164 | 3.342 | 3.337 (behind, detection-limited) |
+| overall (24) | 1.512 | 1.471 | 1.529 | **1.491** (~tie plane) |
+
+Per-scene clean: rust wins 4/6 (hk1/2/4/6), ties hk5 (0.144 vs 0.142), loses only
+hk3 (0.079 vs 0.047, both sub-decimetre). **hk4 flipped from a 2x loss to a win
+(0.678 -> 0.315, recall 0/3 -> 1/3); hk5 from 2x loss to a tie (0.304 -> 0.144).**
+
+**Rust beats C++ at both recall-bearing drift levels (y0, y0.5).** The residual
+y1/y2 deficit is NOT a PGO-quality gap: at that injected drift the revisit has moved
+metres and spatial-NN recall is ~0/6 for ALL configs (rust AND both C++), so
+ate_pgo ≈ ate_drift and the small difference is the drift-baseline keyframe sampling,
+not loop closure. Winning y1/y2 would need appearance-based detection (Scan Context)
+robust to a badly-warped trajectory, not more ICP -- a separate detection problem.

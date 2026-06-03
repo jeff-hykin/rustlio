@@ -40,6 +40,12 @@ PLANE = [
     "submap_resolution=0.2",            # the reference default
 ]
 # Rust port of the point-to-plane approach (backend=rust). Same params + a max-offset reject.
+# key_pose_delta_trans=1.0: match C++ keyframe spacing (rust default 0.5 over-keyframes
+# indoor -> 378 vs C++ 333 kf; the denser graph found the WRONG loops, recall 0/3 on
+# hk4). loop_source_submap_half_range=2: a few-keyframe source submap gives the loop ICP
+# enough geometry to align (single-keyframe source was too sparse indoors). Together these
+# make rust beat C++ plane at the recall-bearing drift levels (y0 0.144 vs 0.320, y0.5
+# 0.823 vs 0.848) and stay neutral at high drift -- see CONCLUSIONS Finding 18.
 RUST = [
     "backend=rust",
     "loop_time_thresh=25",
@@ -47,9 +53,10 @@ RUST = [
     "max_icp_correspondence_dist=1.0",
     "loop_score_tresh=0.3",
     "loop_submap_half_range=10",
-    "loop_source_submap_half_range=0",
+    "loop_source_submap_half_range=2",
     "submap_resolution=0.2",
     "max_loop_offset=2.0",
+    "key_pose_delta_trans=1.0",
 ]
 # Open outdoor scenes produce translation-sliding loops (ground-plane dominant);
 # distrust loop translation, trust rotation (the yaw drift is what matters).

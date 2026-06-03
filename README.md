@@ -18,8 +18,11 @@ error-state Kalman filter (IESKF) over an incremental k-d tree (ikd-tree) map,
 with IMU backward-propagation undistortion and point-to-plane residuals —
 reimplemented in safe Rust. On top of the faithful port it adds:
 
-- **Online gravity estimation** (24-dim error-state, 3-DOF additive gravity) so
-  initial-tilt error is corrected instead of accumulating as vertical drift.
+- **Gravity-aligned initialization** — gravity is fixed at startup from the
+  initial accel mean (21-dim error state, matching the C++ reference), rather
+  than estimated online. An earlier online-gravity variant (24-dim, 3-DOF
+  additive) had its magnitude drift and couple with accel bias, contributing to
+  vertical drift, so it was removed.
 - **Corrected measurement Jacobian** (the rotation block uses the LiDAR→IMU
   extrinsic, not the world position) — the upstream-equivalent derivation.
 - **Rayon-parallelized** per-point association and plane fitting.
@@ -35,7 +38,7 @@ reimplemented in safe Rust. On top of the faithful port it adds:
 With [Nix](https://nixos.org/) (flakes):
 
 ```bash
-nix build              # -> result/bin/{fastlio2, fastlio2-rerun, render, odom_rrd}
+nix build              # -> result/bin/{fastlio2, fastlio2-rerun, render, odom_rrd, reloc_rust}
 nix run .#default -- <args>   # always builds the current sources (no stale binary)
 ```
 

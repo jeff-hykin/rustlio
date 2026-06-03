@@ -86,9 +86,9 @@ builder.process(&mut package);
 // Read state after processing
 if builder.status() == BuilderStatus::Mapping {
     let state = &builder.kf.x;
-    let position = state.t_wi;    // Vector3<f64> — world position
-    let rotation = state.r_wi;    // Matrix3<f64> — world orientation
-    let velocity = state.v;       // Vector3<f64> — velocity
+    let position = state.imu_to_world_trans;  // Vector3<f64> — world position
+    let rotation = state.imu_to_world_rot;    // Matrix3<f64> — world orientation
+    let velocity = state.v;                   // Vector3<f64> — velocity
 }
 ```
 
@@ -106,7 +106,7 @@ if builder.status() == BuilderStatus::Mapping {
 |---|---|
 | `commons` | Core types: `Point`, `PointCloud`, `IMUData`, `SyncPackage`, `Config`, `Pose` |
 | `map_builder` | Top-level pipeline orchestrator (`MapBuilder`) |
-| `ieskf` | Iterated Error-State Kalman Filter — 21-DOF state (rotation, position, IMU-LiDAR extrinsics, velocity, biases, gravity) |
+| `ieskf` | Iterated Error-State Kalman Filter — 21-DOF error state (rotation, position, LiDAR-IMU extrinsics, velocity, gyro/accel biases); gravity is fixed at init, not part of the error state |
 | `imu_processor` | IMU initialization, forward propagation, motion undistortion |
 | `lidar_processor` | Point-to-plane matching, IESKF update, local map management |
 | `ikd_tree` | Incremental k-d tree for nearest-neighbor search with box deletion and downsampling |
@@ -134,14 +134,14 @@ pub struct SyncPackage {
 
 // Kalman filter state (accessible via builder.kf.x)
 pub struct State {
-    pub r_wi: Matrix3<f64>,   // World-to-IMU rotation
-    pub t_wi: Vector3<f64>,   // World-to-IMU translation
-    pub r_il: Matrix3<f64>,   // IMU-to-LiDAR rotation (extrinsic)
-    pub t_il: Vector3<f64>,   // IMU-to-LiDAR translation (extrinsic)
-    pub v: Vector3<f64>,      // Velocity
-    pub bg: Vector3<f64>,     // Gyroscope bias
-    pub ba: Vector3<f64>,     // Accelerometer bias
-    pub g: Vector3<f64>,      // Gravity vector
+    pub imu_to_world_rot: Matrix3<f64>,    // IMU-to-world rotation
+    pub imu_to_world_trans: Vector3<f64>,  // IMU-to-world translation
+    pub lidar_to_imu_rot: Matrix3<f64>,    // LiDAR-to-IMU rotation (extrinsic)
+    pub lidar_to_imu_trans: Vector3<f64>,  // LiDAR-to-IMU translation (extrinsic)
+    pub v: Vector3<f64>,                   // Velocity
+    pub bg: Vector3<f64>,                  // Gyroscope bias
+    pub ba: Vector3<f64>,                  // Accelerometer bias
+    pub g: Vector3<f64>,                   // Gravity vector (fixed at init, not in error state)
 }
 
 // Algorithm config — deserializable from YAML, has sensible defaults
@@ -178,7 +178,7 @@ All fields have defaults and can be loaded from a YAML file via `serde_yaml`:
 **Phase A (core FAST-LIO2) — complete:**
 - IMU forward propagation with bias correction
 - LiDAR motion undistortion (per-point compensation)
-- Iterated Error-State Kalman Filter (IESKF) with 21-DOF state
+- Iterated Error-State Kalman Filter (IESKF) with 21-DOF error state (gravity fixed at init)
 - Point-to-plane matching with incremental k-d tree
 - Local map management (voxel downsampling, box trimming)
 - Velocity-cap guardrail (rejects/rolls back frames that blow up the filter, per-instance state)
@@ -204,7 +204,7 @@ An optional `pcl` feature flag exists (`cargo build --features pcl`) that provid
 ## Tests
 
 ```bash
-cargo test    # 12 tests across so3, ikd_tree, ieskf, voxel_grid, imu_processor, utils
+cargo test    # 13 tests across so3, ikd_tree, ieskf, voxel_grid, imu_processor, map_builder, utils
 ```
 
 ## Dependencies
